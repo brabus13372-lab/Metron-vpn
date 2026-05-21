@@ -3,10 +3,12 @@
 
 Старая SQLite-схема (metron.db):
     users(user_id, username, trial_expired_at, vless_link, uuid, status, notified)
+    Статусы: TRIAL, PAID, EXPIRED
 
 Новая PostgreSQL-схема:
     users(user_id, username, expire_at, vless_link, uuid,
           status, notified, balance, last_billing_date, low_balance_notified)
+    Статусы: NEW, TRIAL, ACTIVE, INACTIVE, EXPIRED
     devices(id, user_id, device_name, client_uuid, vless_link, monthly_cost, ...)
     payments — в старой базе нет, пропускаем
 
@@ -31,11 +33,20 @@ PG_DSN = os.getenv("DATABASE_URL")
 if not PG_DSN:
     raise RuntimeError("DATABASE_URL is not set in environment")
 
-# Стоимость одного дня в копейках (используется для конвертации оставшихся дней → баланс)
+# Стоимость одного дня в копейках
 DAILY_COST_CENTS = int(os.getenv("DAILY_COST_CENTS", "1000"))  # default: 10 руб/день
 
 # Статусы допустимые в новой схеме
 VALID_STATUSES = {"NEW", "TRIAL", "ACTIVE", "INACTIVE", "EXPIRED"}
+
+# Маппинг старых статусов в новые
+STATUS_MAP = {
+    "TRIAL": "TRIAL",
+    "PAID": "ACTIVE",    # в старой базе был PAID, в новой это ACTIVE
+    "ACTIVE": "ACTIVE",
+    "EXPIRED": "EXPIRED",
+    "INACTIVE": "INACTIVE",
+}
 
 
 def safe_parse_datetime(value: str | None) -> datetime | None:
@@ -59,7 +70,6 @@ def safe_parse_datetime(value: str | None) -> datetime | None:
             continue
         try:
             dt = datetime.fromisoformat(cand)
-            # Если нет tzinfo — считаем UTC
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
             return dt
@@ -69,7 +79,7 @@ def safe_parse_datetime(value: str | None) -> datetime | None:
 
 
 def calc_balance_cents(expire: datetime | None, now_utc: datetime) -> int:
-    """Конвертирует оставшиеся дни подписки в копейки для баланса."""
+    """  Конвертирует оставшиеся дни подписки в копейки для баланса."""
     if expire is None:
         return 0
     days_left = max(0, (expire - now_utc).days)
@@ -77,10 +87,8 @@ def calc_balance_cents(expire: datetime | None, now_utc: datetime) -> int:
 
 
 def map_status(old_status: str | None) -> str:
-    """Маппит статус из старой схемы в новую."""
-    if old_status in VALID_STATUSES:
-        return old_status
-    return "TRIAL"
+    """  Маппит статус из старой схемы в новую. PAID -> ACTIVE."""
+    return STATUS_MAP.get(old_status or "", "TRIAL")
 
 
 async def migrate() -> None:
@@ -93,11 +101,10 @@ async def migrate() -> None:
         counts_before: dict[str, int] = {}
         counts_after: dict[str, int] = {}
 
-        # Читаем старую базу
         users = sql_conn.execute("SELECT * FROM users").fetchall()
         counts_before["users"] = len(users)
         counts_before["devices"] = sum(1 for u in users if u["uuid"] and u["vless_link"])
-        counts_before["payments"] = 0  # в старой базе payments не было
+        counts_before["payments"] = 0
 
         async with pg_conn.transaction():
 
@@ -126,7 +133,7 @@ async def migrate() -> None:
                     balance_cents,
                 )
 
-            # ----- devices (создаём 1 устройство на юзера из старых данных) -----
+            # ----- devices (1 устройство на юзера) -----
             for u in users:
                 if not u["uuid"] or not u["vless_link"]:
                     continue
@@ -140,10 +147,10 @@ async def migrate() -> None:
                     u["user_id"],
                     u["uuid"],
                     u["vless_link"],
-                    DAILY_COST_CENTS * 30,  # monthly_cost = 30 дней
+                    DAILY_COST_CENTS * 30,
                 )
 
-            # ----- balance_transactions — фиксируем начисленный баланс как BONUS -----
+            # ----- balance_transactions — BONUS за оставшиеся дни -----
             for u in users:
                 expire = safe_parse_datetime(u["trial_expired_at"])
                 balance_cents = calc_balance_cents(expire, now_utc)
@@ -165,7 +172,7 @@ async def migrate() -> None:
                     f"migration:{u['user_id']}",
                 )
 
-        # ----- синхронизация sequences для devices -----
+        # ----- синхронизация sequences -----
         seq_name = await pg_conn.fetchval(
             "SELECT pg_get_serial_sequence($1, 'id')", "devices"
         )
@@ -183,7 +190,7 @@ async def migrate() -> None:
         print("=" * 60)
         print("Миграция завершена.")
         print(f"DAILY_COST_CENTS = {DAILY_COST_CENTS} ({DAILY_COST_CENTS / 100:.2f} руб/день)")
-        print(f"{'Таблица':<16} {'SQLite':>8} {'PostgreSQL':>12} {'Статус':>10}")
+        print(f"{'  Таблица':<16} {'SQLite':>8} {'PostgreSQL':>12} {'Статус':>10}")
         print("-" * 60)
 
         for table in ("users", "devices", "payments"):
@@ -193,13 +200,13 @@ async def migrate() -> None:
             status_str = "✓ OK" if ok else "✗ MISMATCH"
             if not ok:
                 has_mismatch = True
-            print(f"{table:<16} {before:>8} {after:>12} {status_str:>10}")
+            print(f"  {table:<14} {before:>8} {after:>12} {status_str:>10}")
 
         print("=" * 60)
 
         if has_mismatch:
             raise RuntimeError(
-                f"Row count mismatch detected! {counts_before} -> {counts_after}"
+                f"Row count mismatch! {counts_before} -> {counts_after}"
             )
 
     finally:
