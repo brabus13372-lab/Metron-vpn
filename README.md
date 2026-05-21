@@ -1,6 +1,11 @@
 # METRON_VPN — Telegram VLESS/V2Ray Bot Manager
 
-[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
+[![aiogram](https://img.shields.io/badge/aiogram-3.x-009ddc?logo=telegram&logoColor=white)](https://docs.aiogram.dev/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-asyncpg-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![APScheduler](https://img.shields.io/badge/APScheduler-3.x-orange)](https://apscheduler.readthedocs.io/)
+[![YooKassa](https://img.shields.io/badge/payments-YooKassa-8b5cf6)](https://yookassa.ru/)
+[![3x-ui](https://img.shields.io/badge/panel-3x--ui-red?logo=github)](https://github.com/MHSanaei/3x-ui)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 > High performance. Maximum privacy. Zero nonsense.
