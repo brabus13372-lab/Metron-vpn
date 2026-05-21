@@ -5,7 +5,7 @@
 
 > High performance. Maximum privacy. Zero nonsense.
 
-Telegram-бот для автоматизации выдачи VLESS-доступа через панель **3x-ui**: создание ключей, ежедневный биллинг, продление подписки, ротация ключей, уведомления и поддержка пользователей.
+Telegram-бот для автоматизации выдачи VLESS-доступа через панель **[3x-ui](https://github.com/MHSanaei/3x-ui)**: создание ключей, ежедневный биллинг, продление подписки, ротация ключей, уведомления и поддержка пользователей.
 
 ---
 
@@ -13,12 +13,31 @@ Telegram-бот для автоматизации выдачи VLESS-досту�
 
 - **3x-ui Panel API** — create / renew / deactivate VLESS clients
 - **VLESS/REALITY link generator** — ready-to-import links for users
-- **Telegram Payments (RUB)** — invoice + payment + balance top-up
+- **Telegram Payments (RUB) via YooKassa** — invoice + payment + balance top-up
 - **Daily billing engine** — atomic per-day charge, auto-deactivation on zero balance
 - **Trial period** — configurable free trial (default: 1 day), auto-expiry cycle
 - **Expiration notifications** — proactive reminders before access expires
 - **FSM support tickets** — user → admin ticket flow with inline reply
 - **Global log sanitizer** — tokens / cookies / passwords masked as `[MASKED]` across the entire logging pipeline
+
+---
+
+## Requirements
+
+### Panel
+
+This bot is designed to work with **[3x-ui](https://github.com/MHSanaei/3x-ui)** — a feature-rich Xray panel with a web UI and REST API.
+
+> See the [3x-ui Wiki](https://github.com/MHSanaei/3x-ui/wiki) for installation instructions and configuration details.
+
+You need:
+- A running 3x-ui instance accessible from the bot host
+- A configured **VLESS inbound** (REALITY or TLS) with a known `INBOUND_ID`
+
+### Software
+
+- Python 3.10+
+- PostgreSQL (accessible from the bot host)
 
 ---
 
@@ -65,7 +84,7 @@ Telegram-бот для автоматизации выдачи VLESS-досту�
 | Database | PostgreSQL (asyncpg) |
 | Scheduling | APScheduler 3.x |
 | Config | python-dotenv |
-| Payments | Telegram Payments API (RUB) |
+| Payments | YooKassa via Telegram Payments API |
 
 ---
 
@@ -94,17 +113,11 @@ Everything is replaced with **`[MASKED]`** — no partial leaks.
 
 ## Installation
 
-### Requirements
-
-- Python 3.10+
-- PostgreSQL (accessible from the bot host)
-- A running **3x-ui panel** with a configured **VLESS inbound**
-
 ### Clone & setup
 
 ```bash
-git clone https://github.com/brabus13372-lab/Vpn-project.git
-cd Vpn-project
+git clone https://github.com/brabus13372-lab/Metron-vpn.git
+cd Metron-vpn
 
 python3 -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
@@ -128,7 +141,7 @@ Required variables (see `.env.example` for full list with comments):
 | `PANEL_URL` | 3x-ui panel base URL (no trailing slash) |
 | `PANEL_USER` / `PANEL_PASS` | Panel credentials |
 | `SERVER_IP` | Public IP used in VLESS links |
-| `PAY_TOKEN` | Telegram Payments provider token |
+| `PAY_TOKEN` | YooKassa provider token (from @BotFather) |
 | `DATABASE_URL` | PostgreSQL connection string |
 | `VLESS_PBK` | REALITY public key |
 
@@ -148,7 +161,7 @@ python3 main.py
 | 🚀 Подключить VPN | Create trial key (24h) if no active key |
 | 👤 Мой профиль | View subscription status, balance, devices |
 | 🔄 Обновить ключ | Rotate UUID (invalidate old, issue new) |
-| 💳 Пополнить баланс | Top-up balance via Telegram Payments |
+| 💳 Пополнить баланс | Top-up balance via YooKassa |
 | 🆘 Поддержка | FSM ticket to admin with inline reply |
 
 ---
