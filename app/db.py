@@ -913,6 +913,33 @@ class Database:
                 f"provider_charge_id={provider_charge_id}"
             )
 
+    async def get_expired_trial_users(self) -> List[int]:
+        """Возвращает user_id всех пользователей с истёкшим триалом."""
+        async with self.connection() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT user_id
+                FROM users
+                WHERE status = 'TRIAL'
+                  AND expire_at IS NOT NULL
+                  AND expire_at < NOW()
+                """
+            )
+            return [r["user_id"] for r in rows]
+
+    async def update_user_status(self, user_id: int, status: str) -> bool:
+        """Точечно обновляет статус пользователя без сброса других полей."""
+        if status not in USER_STATUSES:
+            raise ValueError(f"Invalid status: {status}. Must be one of {USER_STATUSES}")
+        async with self.transaction() as conn:
+            result = await conn.execute(
+                "UPDATE users SET status = $1 WHERE user_id = $2",
+                status,
+                user_id,
+            )
+            return result != "UPDATE 0"
+
+
 _db: Optional[Database] = None
 
 async def init_db() -> Database:
@@ -1112,3 +1139,9 @@ async def save_paid_access(
     uuid_val: str,
 ) -> None:
     await get_db().save_paid_access(user_id, username, vless_link, uuid_val)
+
+async def get_expired_trial_users() -> List[int]:
+    return await get_db().get_expired_trial_users()
+
+async def update_user_status(user_id: int, status: str) -> bool:
+    return await get_db().update_user_status(user_id, status)
