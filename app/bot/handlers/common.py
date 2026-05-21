@@ -52,6 +52,7 @@ async def send_dynamic_instruction(
         "<b>🔄 ЕСЛИ НЕ РАБОТАЕТ:</b>\n"
         "• Обновите ключ в «👤 Мой профиль» или напишите в поддержку."
     )
+
     if isinstance(target, types.CallbackQuery):
         await target.message.answer(text, parse_mode="HTML", disable_web_page_preview=True)
         await target.answer()
@@ -63,9 +64,11 @@ async def send_dynamic_instruction(
 async def start_cmd(message: types.Message) -> None:
     user_id = message.from_user.id
     username = message.from_user.username or f"user_{user_id}"
+
     user = await get_user_data_dict(user_id)
 
     if not user:
+        # expire_at = now — пользователь без доступа до покупки/трайала
         empty_expire = datetime.now(timezone.utc)
         await save_user(
             user_id,
@@ -75,7 +78,7 @@ async def start_cmd(message: types.Message) -> None:
             uuid_val="",
             status="NEW",
         )
-        logger.info("Created empty user record user=%s on /start", user_id)
+        logger.info("start_cmd.new_user user_id=%s", user_id)
 
     text = (
         f"Здравствуйте, {html.escape(message.from_user.first_name)}! 🚀\n"
@@ -93,15 +96,15 @@ async def get_vpn(message: types.Message) -> None:
     user_id = message.from_user.id
     username = message.from_user.username or f"user_{user_id}"
     now = datetime.now(timezone.utc)
+
     user = await get_user_data_dict(user_id)
 
-    # --- Если уже есть ключ ---
     if user and user.get("vless_link"):
         balance: Decimal = await get_user_balance(user_id) or Decimal(0)
         expire_raw = user.get("expire_at")
         status = user.get("status") or "NEW"
-        is_expired = True
 
+        is_expired = True
         if expire_raw:
             if isinstance(expire_raw, datetime):
                 expire_dt = expire_raw
@@ -110,9 +113,8 @@ async def get_vpn(message: types.Message) -> None:
                 is_expired = now > expire_dt
             else:
                 logger.warning(
-                    "Unexpected expire_at type for user_id=%s: %r",
-                    user_id,
-                    type(expire_raw),
+                    "get_vpn.unexpected_expire_type user_id=%s type=%r",
+                    user_id, type(expire_raw),
                 )
 
         has_trial_access = status == "TRIAL" and not is_expired
@@ -137,14 +139,14 @@ async def get_vpn(message: types.Message) -> None:
             parse_mode="HTML",
         )
 
-    # --- Новый юзер: создаём клиент в панели ---
     wait_msg = await message.answer("⚙️ Генерируем ваш персональный ключ...")
 
-    # ✅ Без days — create_panel_client не принимает этот аргумент
+    # create_panel_client не принимает days —
+    # длительность трайала определяется через expire_at ниже
     new_link, client_uuid, error = await create_panel_client(user_id, username)
 
     if not new_link:
-        logger.error("Panel Error for %s: %s", user_id, error)
+        logger.error("get_vpn.panel_error user_id=%s err=%s", user_id, error)
         await message.bot.send_message(
             ADMIN_ID,
             f"🚨 <b>Panel Fail:</b> {user_id}\n<code>{html.escape(str(error))}</code>",
@@ -158,16 +160,17 @@ async def get_vpn(message: types.Message) -> None:
     expire_at = now + timedelta(days=TRIAL_DAYS)
     await save_user(user_id, username, expire_at, new_link, client_uuid, status="TRIAL")
 
-    # 📊 Логирование результата активации устройств
-    success_count, fail_count = await activate_all_user_devices(user_id)
-    logger.info(
-        "activated devices user=%s success=%s fail=%s",
-        user_id, success_count, fail_count
-    )
+    ok, fail, _errors = await activate_all_user_devices(user_id)
+    if fail > 0:
+        logger.warning(
+            "get_vpn.activate_partial user_id=%s ok=%s fail=%s errors=%s",
+            user_id, ok, fail, _errors[:3],
+        )
 
     builder = InlineKeyboardBuilder()
     builder.row(types.InlineKeyboardButton(text="💳 Продлить (100₽)", callback_data="buy_vpn"))
     builder.row(types.InlineKeyboardButton(text="📖 Инструкция", callback_data="show_instruction"))
+
     await wait_msg.edit_text(
         f"✅ <b>Доступ предоставлен!</b>\n\n"
         f"🕒 Пробный период: <b>{TRIAL_DAYS} день</b>\n\n"
@@ -176,6 +179,7 @@ async def get_vpn(message: types.Message) -> None:
         reply_markup=builder.as_markup(),
         parse_mode="HTML",
     )
+    logger.info("get_vpn.trial_issued user_id=%s expire_at=%s", user_id, expire_at)
 
 
 @dp.callback_query(F.data == "show_instruction")
