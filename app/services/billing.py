@@ -222,12 +222,14 @@ class BillingEngine:
     async def _deactivate_all_user_devices(self, user_id: int) -> None:
         logger.info("billing.deactivate_devices.start user_id=%s", user_id)
 
-        # ИСПРАВЛЕНО: единообразно 3 значения
-        success_count, fail_count = await deactivate_all_user_devices(user_id)
-
         devices = await get_user_devices(user_id)
+
+        # 1. Сначала помечаем в БД — если бот упадёт, следующий биллинг не начислит
         for dev in devices:
             await deactivate_device(dev["id"], user_id, reason="insufficient_funds")
+
+        # 2. Потом выключаем в панели
+        success_count, fail_count = await deactivate_all_user_devices(user_id)
 
         logger.info(
             "billing.deactivate_devices.done user_id=%s ok=%s fail=%s",

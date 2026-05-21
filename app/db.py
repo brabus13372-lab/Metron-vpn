@@ -793,6 +793,7 @@ class Database:
                 FROM devices d
                 JOIN users u ON u.user_id = d.user_id
                 WHERE u.status = 'ACTIVE'
+                AND d.is_active = TRUE
                 ORDER BY d.user_id
                 """
             )
