@@ -106,15 +106,19 @@ async def start_cmd(message: types.Message) -> None:
         )
         logger.info("start_cmd.new_user user_id=%s", user_id)
 
+    name = html.escape(message.from_user.first_name)
     text = (
-        f"Здравствуйте, {html.escape(message.from_user.first_name)}! 🚀\n"
-        "<b>MetronVPN</b> — ваш доступ к свободному интернету.\n\n"
-        "⚡️ Безлимитный трафик\n"
-        "🔒 Полная анонимность\n"
-        "📱 Настройка за 1 минуту\n\n"
-        "Нажмите кнопку ниже, чтобы получить пробный период."
+        f"Привет, {name}! 👋\n\n"
+        "<b>MetronVPN</b> — быстрый и надёжный VPN без лишних слов.\n\n"
+        "⚡️ <b>Безлимитный трафик</b> — никаких ограничений по скорости\n"
+        "🔒 <b>Полная анонимность</b> — ваши данные только ваши\n"
+        "🌍 <b>Обход блокировок</b> — YouTube, Instagram, любые сайты\n"
+        "📱 <b>Все устройства</b> — iOS, Android, Windows, macOS, Linux\n"
+        "⏱ <b>Подключение за 1 минуту</b> — просто нажмите кнопку\n\n"
+        "Нажмите <b>«🚀 Подключить VPN»</b> — первые дни бесплатно!\n\n"
+        "📢 Новости и обновления: <a href='https://t.me/metronVPN'>t.me/metronVPN</a>"
     )
-    await message.answer(text, reply_markup=main_kb(), parse_mode="HTML")
+    await message.answer(text, reply_markup=main_kb(), parse_mode="HTML", disable_web_page_preview=True)
 
 
 @dp.message(F.text == "🚀 Подключить VPN")
