@@ -804,7 +804,7 @@ class Database:
                 """
                 SELECT COALESCE(SUM(monthly_cost), 0) AS total
                 FROM devices
-                WHERE user_id = $1 AND is_active = TRUE
+                WHERE user_id = $1
                 """,
                 user_id,
             )

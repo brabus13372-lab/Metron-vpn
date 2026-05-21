@@ -14,6 +14,8 @@ from app.db import (
     charge_daily_billing_atomic,
 )
 
+from app.db import get_user_devices, deactivate_device
+
 from app.services.vpn import deactivate_all_user_devices
 
 logger = logging.getLogger(__name__)
@@ -170,6 +172,10 @@ class BillingEngine:
 
         success_count, fail_count = await deactivate_all_user_devices(user_id)
 
+        devices = await get_user_devices(user_id)
+        for dev in devices:
+            await deactivate_device(dev["id"], user_id, reason="insufficient_funds")
+            
         logger.info(
             "billing.deactivate_devices.done user_id=%s success_count=%s fail_count=%s",
             user_id,

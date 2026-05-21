@@ -14,6 +14,8 @@ from app.db import (
     record_payment_idempotent,
     add_balance_atomic,
     save_paid_access,
+    get_user_devices,
+    activate_device,
 )
 from app.services.vpn import (
     activate_all_user_devices,
@@ -55,6 +57,7 @@ def _validate_payment(payment: types.SuccessfulPayment, user_id: int) -> bool:
 
 
 async def _execute_activation(user_id: int, bot: Bot) -> None:
+    """Активирует устройства в панели и синхронизирует is_active в БД."""
     try:
         success, failed, errors = await activate_all_user_devices(user_id)
 
@@ -67,6 +70,19 @@ async def _execute_activation(user_id: int, bot: Bot) -> None:
         await _safe_alert_admin(
             bot,
             f"🚨 CRITICAL activation error user={user_id}: {html.escape(str(e))}",
+        )
+        return
+
+    # Синхронизируем is_active = TRUE в БД
+    try:
+        devices = await get_user_devices(user_id)
+        for dev in devices:
+            await activate_device(dev["id"], user_id)
+    except Exception as e:
+        logger.exception("Failed to sync is_active after activation user=%s", user_id)
+        await _safe_alert_admin(
+            bot,
+            f"🚨 DB SYNC FAIL after activation user={user_id}: {html.escape(str(e))}",
         )
 
 
