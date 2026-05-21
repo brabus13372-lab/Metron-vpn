@@ -12,6 +12,8 @@ from app.db import (
     get_all_users_with_devices,
     get_user_total_monthly_cost,
     charge_daily_billing_atomic,
+    get_expired_trial_users,
+    update_user_status,
 )
 
 from app.db import get_user_devices, deactivate_device
@@ -23,7 +25,8 @@ logger = logging.getLogger(__name__)
 
 class BillingEngine:
     """Биллинг-движок: ежедневно списывает с баланса пользователей
-    стоимость их устройств. Если баланс <= 0 — деактивирует устройства."""
+    стоимость их устройств. Если баланс <= 0 — деактивирует устройства.
+    Также отслеживает истечение триала и отключает пользователей с истёкшим триалом."""
 
     def __init__(self):
         self.scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
@@ -31,7 +34,7 @@ class BillingEngine:
 
     def _setup_jobs(self):
         """Настраивает задачи планировщика"""
-        # Запуск каждый день в 00:05
+        # Списание за устройства — каждый день в 00:05
         self.scheduler.add_job(
             self._daily_billing_cycle,
             trigger=CronTrigger(hour=0, minute=5),
@@ -43,6 +46,19 @@ class BillingEngine:
             misfire_grace_time=3600,
         )
         logger.info(" Биллинг-движок: задача ежедневного списания настроена (00:05)")
+
+        # Отключение истёкших триалов — каждый день в 00:10
+        self.scheduler.add_job(
+            self._trial_expiry_cycle,
+            trigger=CronTrigger(hour=0, minute=10),
+            id="trial_expiry",
+            name="Отключение истёкших триалов",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=3600,
+        )
+        logger.info(" Биллинг-движок: задача отключения триалов настроена (00:10)")
 
     def _calculate_daily_cost_cents(self, monthly_cost_rub: Decimal) -> int:
         """
@@ -64,7 +80,7 @@ class BillingEngine:
             bot = dp.bot
             await bot.send_message(ADMIN_ID, text, parse_mode="HTML")
         except Exception as notify_err:
-            logger.error("billing.admin_notify_failed err=%s", notify_err, exc_info=True)
+            logger.error("биллинг.admin_notify_failed err=%s", notify_err, exc_info=True)
 
     async def _daily_billing_cycle(self):
         """Основной цикл ежедневного списания"""
@@ -165,6 +181,72 @@ class BillingEngine:
 
         except Exception as e:
             logger.error("billing_process_failed user_id=%s err=%s", user_id, e, exc_info=True)
+
+    async def _trial_expiry_cycle(self):
+        """Цикл отключения истёкших триалов: деактивирует устройства и ставит статус EXPIRED."""
+        logger.info(" Начало цикла отключения истёкших триалов...")
+        try:
+            user_ids = await get_expired_trial_users()
+            if not user_ids:
+                logger.info(" Истёкших триалов нет")
+                return
+
+            logger.info(f" Найдено пользователей с истёкшим триалом: {len(user_ids)}")
+
+            for user_id in user_ids:
+                await self._process_trial_expiry(user_id)
+
+            logger.info(" Цикл отключения триалов завершён")
+        except Exception as e:
+            logger.error(f" Критическая ошибка в trial_expiry_cycle: {e}", exc_info=True)
+
+    async def _process_trial_expiry(self, user_id: int):
+        """Обрабатывает истекший триал одного пользователя"""
+        try:
+            logger.info("trial_expiry.start user_id=%s", user_id)
+
+            # Деактивируем устройства в 3X-UI и в БД
+            success_count, fail_count = await deactivate_all_user_devices(user_id)
+
+            devices = await get_user_devices(user_id)
+            for dev in devices:
+                await deactivate_device(dev["id"], user_id, reason="trial_expired")
+
+            # Ставим статус EXPIRED
+            await update_user_status(user_id, "EXPIRED")
+
+            logger.info(
+                "trial_expiry.done user_id=%s devices_ok=%s devices_fail=%s",
+                user_id, success_count, fail_count,
+            )
+
+            # Уведомляем пользователя
+            try:
+                from app.bot.dispatcher import dp
+                bot = dp.bot
+                await bot.send_message(
+                    user_id,
+                    "Ваш бесплатный пробный период закончился.\n"
+                    "Доступ к VPN отключён.\n"
+                    "Чтобы продолжить пользоваться VPN, пополните баланс и подключите устройство.",
+                )
+            except Exception as notify_err:
+                logger.error(
+                    "trial_expiry.user_notify_failed user_id=%s err=%s",
+                    user_id, notify_err,
+                )
+
+            # Уведомляем админа
+            await self._notify_admin(
+                f"<b>Триал истёк</b>\n"
+                f"Пользователь: <code>{user_id}</code>\n"
+                f"Устройств отключено: {success_count}\n"
+                f"Ошибок: {fail_count}\n"
+                f"Статус → EXPIRED"
+            )
+
+        except Exception as e:
+            logger.error("trial_expiry_failed user_id=%s err=%s", user_id, e, exc_info=True)
 
     async def _deactivate_all_user_devices(self, user_id: int):
         """Деактивирует все устройства пользователя в панели 3X-UI и уведомляет юзера"""
