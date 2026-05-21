@@ -50,14 +50,14 @@ async def send_dynamic_instruction(
         "<b>📲 ШАГ 2 — Установите приложение:</b>\n\n"
 
         "💙 <b>iPhone / iPad (iOS):</b>\n"
-        "1. Откройте App Store\n"
-        "2. Скачайте: <a href='https://apps.apple.com/app/v2raytun/id6471850124'>v2RayTun → App Store</a>\n"
-        "3. Установите приложение\n\n"
+        "Откройте App Store и скачайте <b>v2RayTun</b>\n\n"
 
         "💚 <b>Android:</b>\n"
-        "1. Откройте Google Play\n"
-        "2. Скачайте: <a href='https://play.google.com/store/apps/details?id=com.v2raytun.android'>v2RayTun → Google Play</a>\n"
-        "3. Установите приложение\n\n"
+        "Откройте Google Play и скачайте: <a href='https://play.google.com/store/apps/details?id=com.v2raytun.android'>v2RayTun</a>\n\n"
+
+        "🖥 <b>Windows / macOS / Linux:</b>\n"
+        "Скачайте с официального сайта: <a href='https://v2raytun.com'>v2raytun.com</a>\n"
+        "Выберите вашу операционную систему и скачайте установщик.\n\n"
 
         "――――――――――――――――――――\n"
         "<b>⚙️ ШАГ 3 — Добавьте ключ в приложение:</b>\n\n"
