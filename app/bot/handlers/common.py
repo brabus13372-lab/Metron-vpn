@@ -39,18 +39,45 @@ async def send_dynamic_instruction(
 
     safe_link = html.escape(vless_link)
     text = (
-        "<b>📖 ИНСТРУКЦИЯ ПО ПОДКЛЮЧЕНИЮ</b>\n\n"
-        "<b>1️⃣ СКОПИРУЙТЕ ВАШ КЛЮЧ:</b>\n"
-        f"<code>{safe_link}</code>\n\n"
-        "<i>Нажмите на ключ выше для автокопирования.</i>\n\n"
-        "<b>2️⃣ УСТАНОВИТЕ ПРИЛОЖЕНИЕ:</b>\n"
-        "• <b>iOS:</b> <a href='https://apps.apple.com/app/v2raytun/id6471850124'>v2RayTun</a>\n"
-        "• <b>Android:</b> <a href='https://play.google.com/store/apps/details?id=com.v2raytun.android'>v2RayTun</a>\n\n"
-        "<b>3️⃣ ИМПОРТИРУЙТЕ КЛЮЧ:</b>\n"
-        "• В приложении нажмите <b>[ + ]</b> -> <b>Import from Clipboard</b>.\n"
-        "• Выберите конфиг и нажмите кнопку подключения.\n\n"
-        "<b>🔄 ЕСЛИ НЕ РАБОТАЕТ:</b>\n"
-        "• Обновите ключ в «👤 Мой профиль» или напишите в поддержку."
+        "<b>📖 ИНСТРУКЦИЯ ПО ПОДКЛЮЧЕНИЮ</b>\n"
+        "――――――――――――――――――――\n\n"
+
+        "<b>🔑 ШАГ 1 — Скопируйте ваш ключ:</b>\n"
+        f"<code>{safe_link}</code>\n"
+        "<i>↗️ Нажмите на ключ — он скопируется автоматически.</i>\n\n"
+
+        "――――――――――――――――――――\n"
+        "<b>📲 ШАГ 2 — Установите приложение:</b>\n\n"
+
+        "💙 <b>iPhone / iPad (iOS):</b>\n"
+        "1. Откройте App Store\n"
+        "2. Скачайте: <a href='https://apps.apple.com/app/v2raytun/id6471850124'>v2RayTun → App Store</a>\n"
+        "3. Установите приложение\n\n"
+
+        "💚 <b>Android:</b>\n"
+        "1. Откройте Google Play\n"
+        "2. Скачайте: <a href='https://play.google.com/store/apps/details?id=com.v2raytun.android'>v2RayTun → Google Play</a>\n"
+        "3. Установите приложение\n\n"
+
+        "――――――――――――――――――――\n"
+        "<b>⚙️ ШАГ 3 — Добавьте ключ в приложение:</b>\n\n"
+        "1. Откройте v2RayTun\n"
+        "2. Нажмите кнопку <b>[ + ]</b> в правом верхнем углу\n"
+        "3. Выберите <b>« Import from Clipboard »</b>\n"
+        "4. Ключ автоматически вставится — нажмите <b>« Save »</b>\n\n"
+
+        "――――――――――――――――――――\n"
+        "<b>🟢 ШАГ 4 — Включите VPN:</b>\n\n"
+        "1. Выберите сохранённый конфиг (MetronVPN)\n"
+        "2. Нажмите большую кнопку подключения посередине экрана\n"
+        "3. При первом запуске iOS/Android запросит разрешение — нажмите <b>« Allow »</b>\n"
+        "4. В статусной строке появится значок «<b>VPN</b>» — всё работает! 🎉\n\n"
+
+        "――――――――――――――――――――\n"
+        "<b>🔄 Если не работает:</b>\n"
+        "• Проверьте баланс в «👤 Мой профиль»\n"
+        "• Попробуйте переподключиться (выключить и включить)\n"
+        "• Если не помогло — напишите в поддержку, я отвечу лично 🙌"
     )
 
     if isinstance(target, types.CallbackQuery):
@@ -68,7 +95,6 @@ async def start_cmd(message: types.Message) -> None:
     user = await get_user_data_dict(user_id)
 
     if not user:
-        # expire_at = now — пользователь без доступа до покупки/трайала
         empty_expire = datetime.now(timezone.utc)
         await save_user(
             user_id,
@@ -141,8 +167,6 @@ async def get_vpn(message: types.Message) -> None:
 
     wait_msg = await message.answer("⚙️ Генерируем ваш персональный ключ...")
 
-    # create_panel_client не принимает days —
-    # длительность трайала определяется через expire_at ниже
     new_link, client_uuid, error = await create_panel_client(user_id, username)
 
     if not new_link:
