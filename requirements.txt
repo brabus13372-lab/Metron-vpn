@@ -1,0 +1,23 @@
+# Telegram bot framework
+aiogram==3.20.0
+
+# PostgreSQL async driver
+asyncpg
+
+# Environment variables
+python-dotenv
+
+# Job scheduler
+APScheduler==3.11.0
+
+# HTTP client for panel API
+aiohttp
+urllib3
+
+# TTL cache (used in support.py)
+cachetools
+
+# Timezone support (Python 3.9+ stdlib, but backport for older envs)
+# zoneinfo is stdlib in 3.9+, no install needed
+# tzdata is needed on systems without system timezone data (e.g. slim Docker images)
+tzdata
