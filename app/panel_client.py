@@ -18,12 +18,19 @@ manual_cookie_header: str | None = None
 
 
 def _build_connector() -> aiohttp.TCPConnector:
-    # Локально отключаем TLS verify только для панели.
+    # WARNING: TLS verification is disabled (ssl=False).
+    # This is acceptable ONLY when the bot and the panel run on the same host
+    # or the same trusted private network and you cannot provision a valid certificate.
+    # Even in that scenario it is strongly discouraged — a self-signed cert with
+    # ssl_context would be significantly safer. Never use ssl=False in production
+    # when the panel is reachable over the public internet.
     return aiohttp.TCPConnector(ssl=False)
 
 
 def _build_cookie_jar() -> aiohttp.CookieJar:
-    # Для панелей, которые работают по IP / кривому domain в cookie.
+    # unsafe=True is required for panels served over an IP address rather
+    # than a proper domain, because aiohttp normally rejects cookies without
+    # a domain attribute on IP-based origins.
     return aiohttp.CookieJar(unsafe=True)
 
 
@@ -55,10 +62,7 @@ def _extract_manual_cookie_header(resp: aiohttp.ClientResponse) -> str | None:
         if key_val and "=" in key_val:
             cookie_parts.append(key_val)
 
-    if not cookie_parts:
-        return None
-
-    return "; ".join(cookie_parts)
+    return "; ".join(cookie_parts) if cookie_parts else None
 
 
 def _log_cookie_diagnostics(session: aiohttp.ClientSession, source: str) -> None:
@@ -66,13 +70,13 @@ def _log_cookie_diagnostics(session: aiohttp.ClientSession, source: str) -> None
         cookies = session.cookie_jar.filter_cookies(PANEL_URL)
         cookie_names = sorted(cookies.keys())
         logging.debug(
-            "🍪 Panel cookie diagnostics [%s]: jar_cookies=%s manual_cookie_present=%s",
+            "Panel cookie diagnostics [%s]: jar_cookies=%s manual_cookie_present=%s",
             source,
             cookie_names,
             bool(manual_cookie_header),
         )
     except Exception:
-        logging.debug("Не удалось прочитать cookie diagnostics", exc_info=True)
+        logging.debug("Could not read cookie diagnostics", exc_info=True)
 
 
 def _inject_csrf_token(session: aiohttp.ClientSession, headers: dict[str, str]) -> None:
@@ -83,12 +87,11 @@ def _inject_csrf_token(session: aiohttp.ClientSession, headers: dict[str, str]) 
             headers["X-CSRF-TOKEN"] = csrf.value
             return
     except Exception:
-        logging.debug("Не удалось получить csrf_token из cookie_jar", exc_info=True)
+        logging.debug("Could not read csrf_token from cookie_jar", exc_info=True)
 
-    # fallback: если панель чудит, а csrf есть только в ручной cookie-строке
+    # Fallback: extract csrf_token from the manually stored cookie string.
     if manual_cookie_header:
-        parts = [part.strip() for part in manual_cookie_header.split(";")]
-        for part in parts:
+        for part in (p.strip() for p in manual_cookie_header.split(";")):
             if part.startswith("csrf_token="):
                 headers["X-CSRF-TOKEN"] = part.split("=", 1)[1]
                 return
@@ -99,22 +102,23 @@ def _inject_manual_cookie_header(headers: dict[str, str]) -> None:
         headers["Cookie"] = manual_cookie_header
 
 
+# ---------------------------------------------------------------------------
+# Session management
+# ---------------------------------------------------------------------------
+
 async def _login_panel(session: aiohttp.ClientSession) -> None:
     global manual_cookie_header
 
     login_url = f"{PANEL_URL}/login"
-    payload = {
-        "username": PANEL_USER,
-        "password": PANEL_PASS,
-    }
+    payload = {"username": PANEL_USER, "password": PANEL_PASS}
 
-    logging.info("🔐 Логин в 3x-ui panel...")
+    logging.info("Logging in to 3x-ui panel...")
     async with session.post(login_url, data=payload) as resp:
         text = await resp.text()
 
-        extracted_cookie = _extract_manual_cookie_header(resp)
-        if extracted_cookie:
-            manual_cookie_header = extracted_cookie
+        extracted = _extract_manual_cookie_header(resp)
+        if extracted:
+            manual_cookie_header = extracted
 
         try:
             data = json.loads(text)
@@ -124,18 +128,22 @@ async def _login_panel(session: aiohttp.ClientSession) -> None:
         _log_cookie_diagnostics(session, "after-login")
 
         if resp.status != 200 or not isinstance(data, dict) or not data.get("success"):
-            raise RuntimeError(f"Panel login failed: status={resp.status}, body={data}")
+            raise RuntimeError(
+                f"Panel login failed: status={resp.status}, body={data}"
+            )
 
-    logging.info("✅ 3x-ui panel login successful")
+    logging.info("3x-ui panel login successful")
 
 
 async def get_panel_session(force_relogin: bool = False) -> aiohttp.ClientSession:
-    global panel_session, manual_cookie_header  
+    global panel_session, manual_cookie_header
 
+    # Fast path: session exists and is healthy.
     if not force_relogin and panel_session and not panel_session.closed:
         return panel_session
 
     async with panel_session_lock:
+        # Re-check inside the lock to avoid double-init.
         if not force_relogin and panel_session and not panel_session.closed:
             return panel_session
 
@@ -175,9 +183,12 @@ async def close_panel_session() -> None:
         manual_cookie_header = None
 
 
+# ---------------------------------------------------------------------------
+# Core request helper
+# ---------------------------------------------------------------------------
+
 async def _read_response(resp: aiohttp.ClientResponse) -> dict[str, Any]:
     text = await resp.text()
-
     try:
         data = json.loads(text)
         if isinstance(data, dict):
@@ -190,7 +201,7 @@ async def _read_response(resp: aiohttp.ClientResponse) -> dict[str, Any]:
 async def panel_request(
     method: str,
     endpoint: str,
-    retry_on_401: bool = True,  
+    retry_on_401: bool = True,
     use_manual_cookie_fallback: bool = True,
     **kwargs,
 ) -> dict[str, Any]:
@@ -203,16 +214,17 @@ async def panel_request(
 
     headers = dict(kwargs.pop("headers", {}) or {})
     _inject_csrf_token(session, headers)
-
     if use_manual_cookie_fallback:
         _inject_manual_cookie_header(headers)
 
     if method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and "json" not in kwargs:
-        headers.setdefault("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+        headers.setdefault(
+            "Content-Type", "application/x-www-form-urlencoded; charset=UTF-8"
+        )
 
     kwargs["headers"] = headers
 
-    logging.info(" Panel request: %s %s", method.upper(), url)
+    logging.info("Panel request: %s %s", method.upper(), url)
 
     try:
         async with session.request(method.upper(), url, **kwargs) as resp:
@@ -220,11 +232,10 @@ async def panel_request(
 
             if resp.status in (401, 403) and retry_on_401:
                 logging.warning(
-                    " Panel auth issue (status=%s), relogin and retry endpoint=%s",
+                    "Panel auth issue (status=%s), relogin and retry endpoint=%s",
                     resp.status,
                     endpoint,
                 )
-
                 session = await get_panel_session(force_relogin=True)
 
                 retry_headers = dict(kwargs.get("headers", {}))
@@ -235,20 +246,18 @@ async def panel_request(
 
                 async with session.request(method.upper(), url, **kwargs) as retry_resp:
                     retry_result = await _read_response(retry_resp)
-
                     if retry_resp.status >= 400:
                         logging.error(
-                            " Panel retry request failed: status=%s endpoint=%s body=%s",
+                            "Panel retry request failed: status=%s endpoint=%s body=%s",
                             retry_resp.status,
                             endpoint,
                             str(retry_result)[:300],
                         )
-
                     return retry_result
 
             if resp.status >= 400:
                 logging.error(
-                    " Panel request failed: status=%s endpoint=%s body=%s",
+                    "Panel request failed: status=%s endpoint=%s body=%s",
                     resp.status,
                     endpoint,
                     str(result)[:300],
@@ -257,60 +266,35 @@ async def panel_request(
             return result
 
     except asyncio.TimeoutError:
-        logging.error(" Timeout while calling panel endpoint: %s %s", method.upper(), endpoint)
+        logging.error("Timeout on panel endpoint: %s %s", method.upper(), endpoint)
         return {"success": False, "msg": "Panel request timeout"}
-    except aiohttp.ClientError as e:
-        logging.error(" aiohttp error on panel request %s %s: %s", method.upper(), endpoint, e)
-        return {"success": False, "msg": f"Panel HTTP error: {e}"}
-    except Exception as e:
+    except aiohttp.ClientError as exc:
         logging.error(
-            " Unexpected exception on panel request %s %s: %s\n%s",
+            "aiohttp error on panel request %s %s: %s", method.upper(), endpoint, exc
+        )
+        return {"success": False, "msg": f"Panel HTTP error: {exc}"}
+    except Exception as exc:
+        logging.error(
+            "Unexpected exception on panel request %s %s: %s\n%s",
             method.upper(),
             endpoint,
-            e,
+            exc,
             traceback.format_exc(),
         )
-        return {"success": False, "msg": str(e)}
+        return {"success": False, "msg": str(exc)}
 
 
-async def deactivate_client(client_uuid: str) -> tuple[bool, str | None]:
-    logging.info("🔌 Deactivating client %s in panel", client_uuid)
-    ok, msg = await update_client_fields(client_uuid, {"enable": False})
-    if ok:
-        logging.info(" Client %s deactivated successfully", client_uuid)
-        return True, None
-
-    logging.error(" Failed to deactivate client %s: %s", client_uuid, msg)
-    return False, msg
-
-    form_data = {
-        "id": INBOUND_ID,
-        "settings": json.dumps(client_settings, ensure_ascii=False),
-    }
-
-    result = await panel_request(
-        "POST",
-        f"/panel/api/inbounds/updateClient/{client_uuid}",
-        data=form_data,
-    )
-
-    if result.get("success"):
-        logging.info(" Client %s deactivated successfully", client_uuid)
-        return True, None
-
-    msg = result.get("msg") or str(result)
-    logging.error(" Failed to deactivate client %s: %s", client_uuid, msg)
-    return False, msg
-
-#Helpers
+# ---------------------------------------------------------------------------
+# High-level panel helpers
+# ---------------------------------------------------------------------------
 
 async def get_inbound(inbound_id: int = INBOUND_ID) -> dict[str, Any] | None:
     result = await panel_request("GET", f"/panel/api/inbounds/get/{inbound_id}")
     if not result.get("success"):
         return None
-
     obj = result.get("obj")
     return obj if isinstance(obj, dict) else None
+
 
 def parse_inbound_settings(inbound: dict[str, Any]) -> dict[str, Any]:
     raw = inbound.get("settings")
@@ -324,21 +308,29 @@ def parse_inbound_settings(inbound: dict[str, Any]) -> dict[str, Any]:
             return {}
     return {}
 
-def find_client_in_settings(settings: dict[str, Any], client_uuid: str) -> dict[str, Any] | None:
+
+def find_client_in_settings(
+    settings: dict[str, Any], client_uuid: str
+) -> dict[str, Any] | None:
     clients = settings.get("clients")
     if not isinstance(clients, list):
         return None
-
     for client in clients:
         if isinstance(client, dict) and str(client.get("id")) == str(client_uuid):
             return client
     return None
+
 
 async def update_client_fields(
     client_uuid: str,
     patch: dict[str, Any],
     inbound_id: int = INBOUND_ID,
 ) -> tuple[bool, str | None]:
+    """
+    Reads the current client from the inbound, merges `patch` into it,
+    and sends the full updated object back to the panel.
+    Only the keys present in `patch` are changed; all other fields are preserved.
+    """
     inbound = await get_inbound(inbound_id)
     if not inbound:
         return False, "Inbound not found"
@@ -348,8 +340,7 @@ async def update_client_fields(
     if not existing:
         return False, f"Client not found: {client_uuid}"
 
-    updated_client = dict(existing)
-    updated_client.update(patch)
+    updated_client = {**existing, **patch}
 
     form_data = {
         "id": inbound_id,
@@ -367,3 +358,27 @@ async def update_client_fields(
         return True, None
 
     return False, result.get("msg") or str(result)
+
+
+async def deactivate_client(
+    client_uuid: str,
+    inbound_id: int = INBOUND_ID,
+) -> tuple[bool, str | None]:
+    """
+    Disables a single panel client by setting enable=False.
+    Uses update_client_fields so all other client fields are preserved.
+    """
+    logging.info("Deactivating client %s in panel (inbound_id=%s)", client_uuid, inbound_id)
+
+    ok, msg = await update_client_fields(
+        client_uuid,
+        {"enable": False},
+        inbound_id=inbound_id,
+    )
+
+    if ok:
+        logging.info("Client %s deactivated successfully", client_uuid)
+        return True, None
+
+    logging.error("Failed to deactivate client %s: %s", client_uuid, msg)
+    return False, msg
