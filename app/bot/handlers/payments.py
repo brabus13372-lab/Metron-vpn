@@ -1,8 +1,6 @@
-import asyncio
 import html
 import logging
-import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 from aiogram import Bot, F, types
 from aiogram.types import LabeledPrice
@@ -10,63 +8,22 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.bot.dispatcher import dp
 from app.config import ADMIN_ID, PAY_TOKEN, PAYMENT_AMOUNT
-
 from app.db import (
-    add_balance_atomic,
+    ensure_user_stub,
     get_user_data_dict,
-    save_user,
-    get_db_connection,
+    record_payment_idempotent,
+    add_balance_atomic,
+    save_paid_access,
 )
-
 from app.services.vpn import (
     activate_all_user_devices,
     create_panel_client,
-    update_panel_client,
 )
 
 logger = logging.getLogger(__name__)
 
-SUBSCRIPTION_DAYS = 30
 
-
-# =========================
-# DB PAYMENT
-# =========================
-
-def save_payment_if_new(user_id: int, payment) -> bool:
-    """
-    True  -> новый платеж
-    False -> дубль
-    """
-    with get_db_connection(commit=True) as conn:
-        try:
-            conn.execute("""
-                INSERT INTO payments (
-                    user_id,
-                    payload,
-                    telegram_charge_id,
-                    provider_charge_id,
-                    amount
-                ) VALUES (?, ?, ?, ?, ?)
-            """, (
-                user_id,
-                payment.invoice_payload,
-                payment.telegram_payment_charge_id,
-                payment.provider_payment_charge_id,
-                payment.total_amount
-            ))
-            logger.debug("New payment saved user=%s", user_id)
-            return True
-
-        except sqlite3.IntegrityError:
-            return False
-
-
-# =========================
-# HELPERS
-# =========================
-
-async def _safe_alert_admin(bot: Bot, text: str):
+async def _safe_alert_admin(bot: Bot, text: str) -> None:
     if not ADMIN_ID:
         return
     try:
@@ -75,7 +32,7 @@ async def _safe_alert_admin(bot: Bot, text: str):
         logger.exception("ADMIN ALERT FAILED")
 
 
-def _validate_payment(payment, user_id: int) -> bool:
+def _validate_payment(payment: types.SuccessfulPayment, user_id: int) -> bool:
     payload = payment.invoice_payload
 
     if not payload.startswith("vpn_pay_"):
@@ -97,24 +54,7 @@ def _validate_payment(payment, user_id: int) -> bool:
     return True
 
 
-def _parse_expire(expire_raw: str | None) -> datetime:
-    if not expire_raw:
-        return datetime.now(timezone.utc)
-
-    try:
-        clean = expire_raw.replace(" ", "T")
-        dt = datetime.fromisoformat(clean)
-        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-    except (ValueError, TypeError):
-        try:
-            return datetime.strptime(
-                expire_raw, "%Y-%m-%d %H:%M:%S"
-            ).replace(tzinfo=timezone.utc)
-        except Exception:
-            return datetime.now(timezone.utc)
-
-
-async def _execute_activation(user_id: int, bot: Bot):
+async def _execute_activation(user_id: int, bot: Bot) -> None:
     try:
         success, failed, errors = await activate_all_user_devices(user_id)
 
@@ -130,12 +70,8 @@ async def _execute_activation(user_id: int, bot: Bot):
         )
 
 
-# =========================
-# HANDLERS
-# =========================
-
 @dp.callback_query(F.data == "buy_vpn")
-async def send_invoice(call: types.CallbackQuery, bot: Bot):
+async def send_invoice(call: types.CallbackQuery, bot: Bot) -> None:
     await call.answer()
 
     payload = f"vpn_pay_{call.from_user.id}_{int(datetime.now().timestamp())}"
@@ -143,21 +79,21 @@ async def send_invoice(call: types.CallbackQuery, bot: Bot):
     await bot.send_invoice(
         chat_id=call.from_user.id,
         title="MetronVPN",
-        description=f"{SUBSCRIPTION_DAYS} дней доступа",
+        description="Пополнение баланса VPN",
         payload=payload,
         provider_token=PAY_TOKEN,
         currency="RUB",
-        prices=[LabeledPrice(label="VPN", amount=PAYMENT_AMOUNT)],
+        prices=[LabeledPrice(label="VPN balance top-up", amount=PAYMENT_AMOUNT)],
     )
 
 
 @dp.pre_checkout_query(F.invoice_payload.startswith("vpn_pay_"))
-async def pre_checkout(q: types.PreCheckoutQuery, bot: Bot):
+async def pre_checkout(q: types.PreCheckoutQuery, bot: Bot) -> None:
     if q.total_amount != PAYMENT_AMOUNT:
         await bot.answer_pre_checkout_query(
             q.id,
             ok=False,
-            error_message="Неверная сумма платежа"
+            error_message="Неверная сумма платежа",
         )
         return
 
@@ -165,7 +101,7 @@ async def pre_checkout(q: types.PreCheckoutQuery, bot: Bot):
 
 
 @dp.message(F.successful_payment)
-async def success_payment(message: types.Message, bot: Bot):
+async def success_payment(message: types.Message, bot: Bot) -> None:
     user_id = message.from_user.id
     payment = message.successful_payment
 
@@ -173,38 +109,57 @@ async def success_payment(message: types.Message, bot: Bot):
         logger.error("successful_payment handler called without payment object user=%s", user_id)
         return
 
-    amount = payment.total_amount
+    amount_cents = payment.total_amount
 
-    #=========================
-    # VALIDATION
-    # =========================
     if not _validate_payment(payment, user_id):
-        logger.warning("Invalid payment received user=%s payload=%s", user_id, getattr(payment, "invoice_payload", None))
+        logger.warning(
+            "Invalid payment received user=%s payload=%s",
+            user_id,
+            getattr(payment, "invoice_payload", None),
+        )
         await _safe_alert_admin(bot, f"🚨 INVALID PAYMENT user={user_id}")
         return
 
-    # =========================
-    # IDEMPOTENCY
-    # =========================
     try:
-        is_new = await asyncio.to_thread(save_payment_if_new, user_id, payment)
-        if not is_new:
+        await ensure_user_stub(
+            user_id=user_id,
+            username=(message.from_user.username or f"user_{user_id}")[:32],
+        )
+    except Exception as e:
+        logger.exception("Failed to ensure user stub user=%s", user_id)
+        await _safe_alert_admin(bot, f"🚨 USER STUB FAIL {html.escape(str(e))}")
+        return
+
+    try:
+        payment_result = await record_payment_idempotent(
+            user_id=user_id,
+            payload=payment.invoice_payload,
+            telegram_charge_id=payment.telegram_payment_charge_id,
+            provider_charge_id=payment.provider_payment_charge_id,
+            amount_cents=amount_cents,
+        )
+
+        if not payment_result["created"]:
             logger.warning(
                 "Duplicate payment ignored user=%s provider_charge_id=%s",
                 user_id,
                 payment.provider_payment_charge_id,
             )
             return
+
     except Exception as e:
         logger.exception("Failed to save payment user=%s", user_id)
         await _safe_alert_admin(bot, f"🚨 PAYMENT SAVE FAIL {html.escape(str(e))}")
         return
 
-    # =========================
-    # BALANCE
-    # =========================
     try:
-        new_balance = await asyncio.to_thread(add_balance_atomic, user_id, amount)
+        new_balance = await add_balance_atomic(
+            user_id=user_id,
+            amount_cents=amount_cents,
+            reference_type="payment",
+            reference_id=payment.provider_payment_charge_id,
+            idempotency_key=f"payment:{payment.provider_payment_charge_id}",
+        )
         if new_balance is None:
             logger.error("User not found during balance top-up user=%s", user_id)
             await _safe_alert_admin(bot, f"🚨 USER NOT FOUND {user_id}")
@@ -215,11 +170,8 @@ async def success_payment(message: types.Message, bot: Bot):
         await _safe_alert_admin(bot, f"🚨 DB ERROR {html.escape(str(e))}")
         return
 
-    # =========================
-    # USER DATA
-    # =========================
     try:
-        user_data = await asyncio.to_thread(get_user_data_dict, user_id)
+        user_data = await get_user_data_dict(user_id)
     except Exception as e:
         logger.exception("Failed to fetch user data user=%s", user_id)
         await _safe_alert_admin(bot, f"🚨 USER DATA FAIL {html.escape(str(e))}")
@@ -230,97 +182,65 @@ async def success_payment(message: types.Message, bot: Bot):
         await _safe_alert_admin(bot, f"🚨 USER DATA MISSING {user_id}")
         return
 
-    now = datetime.now(timezone.utc)
-    expire_raw = user_data.get("expire_at")
-    current_expire = _parse_expire(expire_raw)
-    start = max(now, current_expire)
-    new_expire = start + timedelta(days=SUBSCRIPTION_DAYS)
-
-    expire_str = new_expire.strftime("%Y-%m-%d %H:%M:%S")
-    target_ts = int(new_expire.timestamp() * 1000)
-
     username = (user_data.get("username") or f"user_{user_id}")[:32]
     vless_link = user_data.get("vless_link")
     uuid = user_data.get("uuid")
 
-    # =========================
-    # VPN PANEL
-    # =========================
     try:
         if not vless_link or not uuid:
             vless_link, uuid, err = await create_panel_client(
-                user_id,
-                username,
-                days=SUBSCRIPTION_DAYS,
+                user_id=user_id,
+                username=username,
             )
             if not vless_link or not uuid:
                 raise RuntimeError(err or "create_panel_client returned empty result")
-        else:
-            ok, err = await update_panel_client(
-                uuid,
-                user_id,
-                username,
-                target_ts,
-            )
-            if not ok:
-                raise RuntimeError(err or "update_panel_client failed")
+
+        await save_paid_access(
+            user_id=user_id,
+            username=username,
+            vless_link=vless_link,
+            uuid_val=uuid,
+        )
+
     except Exception as e:
-        logger.exception("VPN panel operation failed user=%s", user_id)
+        logger.exception("VPN/user sync failed user=%s", user_id)
         await _safe_alert_admin(
             bot,
-            f"🚨 VPN FAIL user={user_id} err={html.escape(str(e))}",
+            f"🚨 VPN/SAVE FAIL user={user_id} err={html.escape(str(e))}",
         )
         await message.answer(
-            "⚠️ Оплата прошла, но произошла проблема, доступ будет выдан, прошу подождите",
+            "⚠️ Оплата прошла, баланс пополнен, но при выдаче доступа произошла ошибка. Мы уже разберёмся.",
             disable_web_page_preview=True,
         )
         return
 
-    #=========================
-    # SAVE USER
-    # =========================
-    try:
-        await asyncio.to_thread(
-            save_user,
-            user_id,
-            username,
-            expire_str,
-            vless_link,
-            uuid,
-            "PAID",
-        )
-    except Exception as e:
-        logger.exception("Failed to save user after payment user=%s", user_id)
-        await _safe_alert_admin(bot, f"🚨 SAVE USER FAIL {html.escape(str(e))}")
-        return
+    await _execute_activation(user_id, bot)
 
-    # =========================
-    # RESPONSE
-    # =========================
-    kb = InlineKeyboardBuilder().row(
+    builder = InlineKeyboardBuilder()
+    builder.row(
         types.InlineKeyboardButton(
             text="📖 Инструкция",
             callback_data="show_instruction",
         )
-    ).as_markup()
+    )
+    kb = builder.as_markup()
 
     await message.answer(
-        f"🎉 Оплата прошла\n"
-        f"Доступ до: {expire_str}\n"
-        f"Баланс: {new_balance:.2f}",
+        "🎉 Оплата прошла успешно\n"
+        f"Баланс: {new_balance:.2f} ₽\n"
+        "Доступ активирован.",
         reply_markup=kb,
         disable_web_page_preview=True,
     )
 
     logger.info(
-        "PAYMENT SUCCESS user=%s amount=%s balance=%s expire_at=%s",
+        "PAYMENT SUCCESS user=%s amount_cents=%s balance=%s",
         user_id,
-        amount,
+        amount_cents,
         new_balance,
-        expire_str,
     )
 
     await _safe_alert_admin(
         bot,
-        f"💰 Payment OK user={user_id} amount={amount}",
+        f"💰 Payment OK user={user_id} amount={amount_cents}",
     )

@@ -23,48 +23,59 @@ if __name__ == "__main__":
 
     from app.bot.dispatcher import dp
     from app.config import ADMIN_ID, BOT_TOKEN, VLESS_SID
-    from app.db import init_db
+    from app.db import init_db, close_db
     from app.services.notifications import check_expirations
+
+
+    def _log_task_exception(task: asyncio.Task) -> None:
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logging.exception("Background task failed")
 
     async def main():
         required = ["BOT_TOKEN", "ADMIN_ID", "PANEL_URL", "PANEL_USER", "PANEL_PASS", "SERVER_IP", "VLESS_PBK", "PAY_TOKEN"]
         for var in required:
             if not os.getenv(var):
-                logging.critical(f"💥 Критическая ошибка: переменная {var} не задана! Бот не запустится.")
+                logging.critical(f" Критическая ошибка: переменная {var} не задана! Бот не запустится.")
                 sys.exit(1)
 
         if ADMIN_ID <= 0:
-            logging.critical("💥 Критическая ошибка: ADMIN_ID должен быть больше нуля!")
+            logging.critical(" Критическая ошибка: ADMIN_ID должен быть больше нуля!")
             sys.exit(1)
         
         if not VLESS_SID:
-            logging.warning("⚠️ VLESS_SID не задан. Если REALITY требует SID, ключи могут не работать.")
+            logging.warning(" VLESS_SID не задан. Если REALITY требует SID, ключи могут не работать.")
         
-        init_db()
+        await init_db()
         bot = Bot(token=BOT_TOKEN)
         scheduler = AsyncIOScheduler()
         scheduler.add_job(check_expirations, "interval", minutes=10, args=[bot])
         scheduler.start()
 
         startup_check_task = asyncio.create_task(check_expirations(bot))
+        startup_check_task.add_done_callback(_log_task_exception)
         billing_engine.start()
         
 
-        logging.info("🚀 MetronVPN запущен и готов к работе.")
+        logging.info(" MetronVPN запущен и готов к работе.")
         try:
             await bot.delete_webhook(drop_pending_updates=True)
             await dp.start_polling(bot)
         finally:
+            logging.info("Начинаем graceful shutdown...")
             billing_engine.stop()
             await bot.session.close()
-            if panel_client.panel_session and not panel_client.panel_session.closed:
-                await panel_client.panel_session.close()
+            await panel_client.close_panel_session()
             if scheduler.running:
                 scheduler.shutdown(wait=False)
             if startup_check_task and not startup_check_task.done():
                 startup_check_task.cancel()
+            await close_db()
 
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
-        logging.info("👋 Работа бота завершена.")
+        logging.info(" Работа бота завершена.")

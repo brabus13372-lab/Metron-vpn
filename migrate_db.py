@@ -1,218 +1,190 @@
+"""
+Одноразовый скрипт миграции данных из SQLite в PostgreSQL.
+
+Ожидания:
+- Целевая PostgreSQL-база ДОЛЖНА быть пустой по таблицам users/devices/payments.
+- DATABASE_URL в env (обязательно).
+- SQLITE_PATH из env или "metron.db" по умолчанию.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
 import sqlite3
-import shutil
-import logging
-from pathlib import Path
+from datetime import datetime, timezone
 
-DB_PATH = "metron.db"
+import asyncpg
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger(__name__)
-
-
-def column_exists(conn, table: str, column: str) -> bool:
-    cols = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    return any(c[1] == column for c in cols)
+SQLITE_PATH = os.getenv("SQLITE_PATH", "metron.db")
+PG_DSN = os.getenv("DATABASE_URL")
+if not PG_DSN:
+    raise RuntimeError("DATABASE_URL is not set in environment")
 
 
-def table_exists(conn, table: str) -> bool:
-    """Проверяет, существует ли таблица"""
-    result = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-        (table,)
-    ).fetchone()
-    return result is not None
+def safe_parse_datetime(value: str | None) -> datetime | None:
+    """
+    Парсит дату-время из SQLite.
+    Поддерживает: ISO, YYYY-MM-DD HH:MM:SS, YYYY-MM-DD.
+    Возвращает None при ошибке парсинга.
+    """
+    if not value:
+        return None
+
+    raw = value.strip()
+    candidates = [
+        raw,
+        raw.replace(" ", "T"),
+        raw[:10] + "T00:00:00" if len(raw) == 10 else None,
+    ]
+
+    for cand in candidates:
+        if cand is None:
+            continue
+        try:
+            return datetime.fromisoformat(cand)
+        except (ValueError, TypeError):
+            continue
+    return None
 
 
-def apply_migrations(db_path: str = DB_PATH) -> None:
-    target = Path(db_path)
+def safe_parse_date(value: str | None) -> str | None:
+    """Извлекает дату (первые 10 символов) из строки SQLite."""
+    if not value:
+        return None
+    return value.strip()[:10]
 
-    if not target.exists():
-        logger.info("БД не найдена — пропуск.")
-        return
 
-    backup = target.with_suffix(".db.bak")
-    shutil.copy2(target, backup)
-    logger.info("Создан бэкап: %s", backup)
-
-    conn = sqlite3.connect(target)
+async def migrate() -> None:
+    sql_conn = sqlite3.connect(SQLITE_PATH)
+    sql_conn.row_factory = sqlite3.Row
+    pg_conn = await asyncpg.connect(PG_DSN)
 
     try:
-        conn.execute("PRAGMA locking_mode = EXCLUSIVE")
-        conn.execute("BEGIN EXCLUSIVE")
+        counts_before: dict[str, int] = {}
+        counts_after: dict[str, int] = {}
+        now_utc = datetime.now(timezone.utc)
 
-        # =========================
-        # VERSION TABLE
-        # =========================
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS schema_version (
-                version INTEGER PRIMARY KEY,
-                applied_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+        async with pg_conn.transaction():
+            # ----- users -----
+            users = sql_conn.execute("SELECT * FROM users").fetchall()
+            counts_before["users"] = len(users)
 
-        version = conn.execute(
-            "SELECT COALESCE(MAX(version), 0) FROM schema_version"
-        ).fetchone()[0]
+            for u in users:
+                expire = safe_parse_datetime(u["trial_expired_at"])
+                last_bill = safe_parse_date(u["last_billing_date"])
 
-        # =========================
-        # V1 — копейки (у тебя уже есть)
-        # =========================
-        if version < 1:
-            logger.info("Применяем миграцию v1 (копейки)")
-
-            conn.executescript("""
-                UPDATE users 
-                SET balance = CAST(ROUND(COALESCE(balance, 0) * 100) AS INTEGER);
-
-                UPDATE devices 
-                SET monthly_cost = CAST(ROUND(COALESCE(monthly_cost, 0) * 100) AS INTEGER);
-            """)
-
-            conn.execute("INSERT INTO schema_version (version) VALUES (1)")
-            version = 1
-
-        # ... (всё что было до v2 остаётся)
-
-        # =========================
-        # V2 — защита платежей
-        # =========================
-        if version < 2:
-            logger.info("Применяем миграцию v2 (payments safety)")
-
-            if not column_exists(conn, "users", "last_payment_payload"):
-                conn.execute("""
-                    ALTER TABLE users ADD COLUMN last_payment_payload TEXT
-                """)
-
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS payments (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER NOT NULL,
-                    payload TEXT,
-                    telegram_charge_id TEXT,
-                    provider_charge_id TEXT,
-                    amount INTEGER NOT NULL,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY(user_id) REFERENCES users(user_id)
-                )
-            """)
-
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_payments_user 
-                ON payments(user_id)
-            """)
-
-            conn.execute("INSERT INTO schema_version (version) VALUES (2)")
-            version = 2
-
-                # =========================
-        # V3 — UNIQUE для provider_charge_id
-        # =========================
-        if version < 3:
-            logger.info("Применяем миграцию v3 (payments UNIQUE constraint)")
-
-            if not table_exists(conn, "payments"):
-                logger.info("Таблица payments отсутствует, создаём сразу корректную схему")
-
-                conn.execute("""
-                    CREATE TABLE payments (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        user_id INTEGER NOT NULL,
-                        payload TEXT,
-                        telegram_charge_id TEXT,
-                        provider_charge_id TEXT UNIQUE NOT NULL,
-                        amount INTEGER NOT NULL,
-                        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY(user_id) REFERENCES users(user_id)
+                await pg_conn.execute(
+                    """
+                    INSERT INTO users (
+                        user_id, username, expire_at, vless_link, uuid,
+                        status, notified, balance, last_billing_date
                     )
-                """)
-                conn.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_payments_user
-                    ON payments(user_id)
-                """)
-            else:
-                row = conn.execute("""
-                    SELECT sql
-                    FROM sqlite_master
-                    WHERE type='table' AND name='payments'
-                """).fetchone()
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::date)
+                    ON CONFLICT (user_id) DO NOTHING
+                    """,
+                    u["user_id"],
+                    u["username"],
+                    expire,
+                    u["vless_link"],
+                    u["uuid"],
+                    u["status"],
+                    bool(u["notified"]),
+                    u["balance"],
+                    last_bill,
+                )
 
-                create_sql = row[0] if row else ""
-                has_unique = "provider_charge_id TEXT UNIQUE" in create_sql or \
-                             "provider_charge_id TEXT UNIQUE NOT NULL" in create_sql
+            # ----- devices -----
+            devices = sql_conn.execute("SELECT * FROM devices").fetchall()
+            counts_before["devices"] = len(devices)
 
-                if has_unique:
-                    logger.info("UNIQUE на provider_charge_id уже существует, пропускаем пересоздание")
-                else:
-                    logger.info("Пересоздаём payments с UNIQUE(provider_charge_id)")
+            for d in devices:
+                created = safe_parse_datetime(d["created_at"]) or now_utc
 
-                    conn.execute("DROP TABLE IF EXISTS payments_old")
-                    conn.execute("ALTER TABLE payments RENAME TO payments_old")
+                await pg_conn.execute(
+                    """
+                    INSERT INTO devices (
+                        id, user_id, device_name, client_uuid,
+                        vless_link, monthly_cost, created_at
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    ON CONFLICT (id) DO NOTHING
+                    """,
+                    d["id"],
+                    d["user_id"],
+                    d["device_name"],
+                    d["client_uuid"],
+                    d["vless_link"],
+                    d["monthly_cost"],
+                    created,
+                )
 
-                    conn.execute("""
-                        CREATE TABLE payments (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            user_id INTEGER NOT NULL,
-                            payload TEXT,
-                            telegram_charge_id TEXT,
-                            provider_charge_id TEXT UNIQUE NOT NULL,
-                            amount INTEGER NOT NULL,
-                            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                            FOREIGN KEY(user_id) REFERENCES users(user_id)
-                        )
-                    """)
+            # ----- payments -----
+            payments = sql_conn.execute("SELECT * FROM payments").fetchall()
+            counts_before["payments"] = len(payments)
 
-                    conn.execute("""
-                        INSERT OR IGNORE INTO payments (
-                            id,
-                            user_id,
-                            payload,
-                            telegram_charge_id,
-                            provider_charge_id,
-                            amount,
-                            created_at
-                        )
-                        SELECT
-                            id,
-                            user_id,
-                            payload,
-                            telegram_charge_id,
-                            provider_charge_id,
-                            amount,
-                            created_at
-                        FROM payments_old
-                        WHERE provider_charge_id IS NOT NULL
-                          AND TRIM(provider_charge_id) != ''
-                        ORDER BY id
-                    """)
+            for p in payments:
+                created = safe_parse_datetime(p["created_at"]) or now_utc
 
-                    conn.execute("DROP TABLE payments_old")
+                await pg_conn.execute(
+                    """
+                    INSERT INTO payments (
+                        id, user_id, payload, telegram_charge_id,
+                        provider_charge_id, amount, created_at
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    ON CONFLICT (id) DO NOTHING
+                    """,
+                    p["id"],
+                    p["user_id"],
+                    p["payload"],
+                    p["telegram_charge_id"],
+                    p["provider_charge_id"],
+                    p["amount"],
+                    created,
+                )
 
-                    conn.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_payments_user
-                        ON payments(user_id)
-                    """)
+        # ----- сверка row counts -----
+        for table in ("users", "devices", "payments"):
+            counts_after[table] = await pg_conn.fetchval(f"SELECT COUNT(*) FROM {table}")
 
-                    logger.info("✅ Таблица payments пересоздана с UNIQUE(provider_charge_id)")
+        # ----- динамическая синхронизация sequences -----
+        for table in ("devices", "payments"):
+            seq_name = await pg_conn.fetchval(
+                "SELECT pg_get_serial_sequence($1, 'id')",
+                table,
+            )
+            if seq_name:
+                await pg_conn.execute(
+                    f"SELECT setval('{seq_name}', COALESCE((SELECT MAX(id) FROM {table}), 1), true)"
+                )
 
-            conn.execute("INSERT INTO schema_version (version) VALUES (3)")
-            version = 3
+        # ----- вывод итогов -----
+        has_mismatch = False
+        print("=" * 55)
+        print("Миграция завершена.")
+        print(f"{'Таблица':<12} {'SQLite':>8} {'PostgreSQL':>12} {'Статус':>12}")
+        print("-" * 55)
 
-        logger.info("Миграции завершены. Текущая версия: %s", version)
+        for table in ("users", "devices", "payments"):
+            before = counts_before.get(table, 0)
+            after = counts_after.get(table, 0)
+            status = "✓ OK" if before == after else "✗ MISMATCH"
+            if before != after:
+                has_mismatch = True
+            print(f"{table:<12} {before:>8} {after:>12} {status:>12}")
 
-        conn.commit()
+        print("=" * 55)
 
-    except Exception as e:
-        conn.rollback()
-        conn.close()
-
-        shutil.copy2(backup, target)
-        logger.error("ОТКАТ К БЭКАПУ! Ошибка: %s", e)
-        raise
+        if has_mismatch:
+            raise RuntimeError(
+                f"Row count mismatch detected! Counts: {counts_before} -> {counts_after}"
+            )
 
     finally:
-        conn.close()
+        sql_conn.close()
+        await pg_conn.close()
 
 
 if __name__ == "__main__":
-    apply_migrations()
+    asyncio.run(migrate())

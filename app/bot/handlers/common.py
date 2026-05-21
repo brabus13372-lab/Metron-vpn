@@ -1,32 +1,31 @@
-import asyncio
 import html
 import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Union
 
-from aiogram import types, F
+from aiogram import F, types
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.bot.dispatcher import dp
 from app.bot.keyboards import main_kb
+from app.config import ADMIN_ID, TRIAL_DAYS
 from app.db import (
-    get_user_data_dict, 
-    get_user_balance, 
-    add_balance_atomic, 
-    save_user
+    get_user_data_dict,
+    get_user_balance,
+    save_user,
 )
 from app.services.vpn import create_panel_client, activate_all_user_devices
-from app.config import ADMIN_ID
 
 logger = logging.getLogger(__name__)
 
-TRIAL_DAYS = 1
-TRIAL_BALANCE_CENTS = 10000
 
-async def send_dynamic_instruction(target: Union[types.Message, types.CallbackQuery], user_id: int) -> None:
-    user = await asyncio.to_thread(get_user_data_dict, user_id)
+async def send_dynamic_instruction(
+    target: Union[types.Message, types.CallbackQuery],
+    user_id: int,
+) -> None:
+    user = await get_user_data_dict(user_id)
     vless_link = user.get("vless_link") if user else None
 
     if not vless_link:
@@ -60,31 +59,28 @@ async def send_dynamic_instruction(target: Union[types.Message, types.CallbackQu
     else:
         await target.answer(text, parse_mode="HTML", disable_web_page_preview=True)
 
+
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message) -> None:
     user_id = message.from_user.id
     username = message.from_user.username or f"user_{user_id}"
-    
-    # Проверяем, есть ли юзер уже в БД
-    user = await asyncio.to_thread(get_user_data_dict, user_id)
-    
-    # Если юзера нет — создаём "пустую" запись
+
+    user = await get_user_data_dict(user_id)
+
     if not user:
-        # Срок истекает прямо сейчас (чтобы триал не начинался просто так)
-        empty_expire = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-        
-        await asyncio.to_thread(
-            save_user,
+        empty_expire = datetime.now(timezone.utc)
+
+        await save_user(
             user_id,
             username,
             empty_expire,
-            vless_link="",  # Пока пустой
-            uuid_val="",    # Пока пустой
-            status='NEW'    # Новый статус, чтобы отличить от TRIAL/PAID
+            vless_link="",
+            uuid_val="",
+            status="NEW",
         )
-        
+
         logger.info("Created empty user record user=%s on /start", user_id)
-    
+
     text = (
         f"Здравствуйте, {html.escape(message.from_user.first_name)}! 🚀\n"
         "<b>MetronVPN</b> — ваш доступ к свободному интернету.\n\n"
@@ -95,64 +91,76 @@ async def start_cmd(message: types.Message) -> None:
     )
     await message.answer(text, reply_markup=main_kb(), parse_mode="HTML")
 
+
 @dp.message(F.text == "🚀 Подключить VPN")
 async def get_vpn(message: types.Message) -> None:
     user_id = message.from_user.id
-    username = html.escape(message.from_user.username or f"user_{user_id}")
+    username = message.from_user.username or f"user_{user_id}"
     now = datetime.now(timezone.utc)
 
-    user = await asyncio.to_thread(get_user_data_dict, user_id)
-    
+    user = await get_user_data_dict(user_id)
+
     if user and user.get("vless_link"):
-        balance: Decimal = await asyncio.to_thread(get_user_balance, user_id) or Decimal(0)
+        balance: Decimal = await get_user_balance(user_id) or Decimal(0)
         expire_raw = user.get("expire_at")
-        
+        status = user.get("status") or "NEW"
+
         is_expired = True
         if expire_raw:
-            try:
-                expire_dt = datetime.strptime(expire_raw, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            if isinstance(expire_raw, datetime):
+                expire_dt = expire_raw
+                if expire_dt.tzinfo is None:
+                    expire_dt = expire_dt.replace(tzinfo=timezone.utc)
                 is_expired = now > expire_dt
-            except ValueError:
-                pass
+            else:
+                logger.warning(
+                    "Unexpected expire_at type for user_id=%s: %r",
+                    user_id,
+                    type(expire_raw),
+                )
 
-        if balance > 0 and not is_expired:
+        has_trial_access = status == "TRIAL" and not is_expired
+        has_paid_access = status == "ACTIVE" and balance > 0 and not is_expired
+
+        if has_trial_access or has_paid_access:
             safe_link = html.escape(user["vless_link"])
             builder = InlineKeyboardBuilder()
             builder.row(types.InlineKeyboardButton(text="💳 Продлить", callback_data="buy_vpn"))
             builder.row(types.InlineKeyboardButton(text="📖 Инструкция", callback_data="show_instruction"))
-            
+
             return await message.answer(
                 f"✅ <b>Ваш ключ активен:</b>\n\n<code>{safe_link}</code>",
                 reply_markup=builder.as_markup(),
-                parse_mode="HTML"
+                parse_mode="HTML",
             )
-        
-        builder = InlineKeyboardBuilder().row(
-            types.InlineKeyboardButton(text="💳 Пополнить баланс", callback_data="buy_vpn")
-        )
+
+        builder = InlineKeyboardBuilder()
+        builder.row(types.InlineKeyboardButton(text="💳 Пополнить баланс", callback_data="buy_vpn"))
         return await message.answer(
             "⚠️ <b>Доступ ограничен.</b>\nДля активации ключа необходимо пополнить баланс.",
             reply_markup=builder.as_markup(),
-            parse_mode="HTML"
+            parse_mode="HTML",
         )
 
     wait_msg = await message.answer("⚙️ Генерируем ваш персональный ключ...")
-    
+
     new_link, client_uuid, error = await create_panel_client(user_id, username, days=TRIAL_DAYS)
-    
+
     if not new_link:
         logger.error("Panel Error for %s: %s", user_id, error)
         await message.bot.send_message(
-            ADMIN_ID, 
-            f"🚨 <b>Panel Fail:</b> {user_id}\n<code>{html.escape(str(error))}</code>", 
-            parse_mode="HTML"
+            ADMIN_ID,
+            f"🚨 <b>Panel Fail:</b> {user_id}\n<code>{html.escape(str(error))}</code>",
+            parse_mode="HTML",
         )
-        return await wait_msg.edit_text("❌ Сервер перегружен. Пожалуйста, попробуйте через 5 минут.", parse_mode="HTML")
+        return await wait_msg.edit_text(
+            "❌ Сервер перегружен. Пожалуйста, попробуйте через 5 минут.",
+            parse_mode="HTML",
+        )
 
-    expire_at = (now + timedelta(days=TRIAL_DAYS)).strftime('%Y-%m-%d %H:%M:%S')
-    
-    await asyncio.to_thread(save_user, user_id, username, expire_at, new_link, client_uuid, status='TRIAL')
-    await add_balance_atomic(user_id, TRIAL_BALANCE_CENTS)
+    expire_at = now + timedelta(days=TRIAL_DAYS)
+
+    await save_user(user_id, username, expire_at, new_link, client_uuid, status="TRIAL")
     await activate_all_user_devices(user_id)
 
     builder = InlineKeyboardBuilder()
@@ -165,12 +173,14 @@ async def get_vpn(message: types.Message) -> None:
         f"<code>{html.escape(new_link)}</code>\n\n"
         f"<i>Нажмите на ключ, чтобы скопировать.</i>",
         reply_markup=builder.as_markup(),
-        parse_mode="HTML"
+        parse_mode="HTML",
     )
+
 
 @dp.callback_query(F.data == "show_instruction")
 async def handle_inline_instruction(call: types.CallbackQuery) -> None:
     await send_dynamic_instruction(call, call.from_user.id)
+
 
 @dp.message(F.text == "📖 Инструкция")
 async def handle_reply_instruction(message: types.Message) -> None:

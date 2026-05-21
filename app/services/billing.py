@@ -1,6 +1,5 @@
 import logging
 from datetime import datetime
-import asyncio
 
 from app.config import ADMIN_ID
 
@@ -37,6 +36,9 @@ class BillingEngine:
             id="daily_billing",
             name="Ежедневное списание за устройства",
             replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=3600,
         )
         logger.info(" Биллинг-движок: задача ежедневного списания настроена (00:05)")
 
@@ -51,11 +53,22 @@ class BillingEngine:
         )
         return int(daily_rub * 100)
 
+    async def _notify_admin(self, text: str) -> None:
+        if not ADMIN_ID:
+            return
+
+        try:
+            from app.bot.dispatcher import dp
+            bot = dp.bot
+            await bot.send_message(ADMIN_ID, text, parse_mode="HTML")
+        except Exception as notify_err:
+            logger.error("billing.admin_notify_failed err=%s", notify_err, exc_info=True)
+
     async def _daily_billing_cycle(self):
         """Основной цикл ежедневного списания"""
         logger.info(" Начало ежедневного биллинг-цикла...")
         try:
-            user_ids = await asyncio.to_thread(get_all_users_with_devices)
+            user_ids = await get_all_users_with_devices()
             if not user_ids:
                 logger.info(" Нет пользователей с устройствами для списания")
                 return
@@ -72,22 +85,21 @@ class BillingEngine:
     async def _process_user_billing(self, user_id: int):
         """Обрабатывает списание для одного пользователя"""
         try:
-            total_monthly_cost = await asyncio.to_thread(get_user_total_monthly_cost, user_id)
+            total_monthly_cost = await get_user_total_monthly_cost(user_id)
             if total_monthly_cost <= Decimal("0"):
                 logger.debug("user_id=%s skip billing reason=no_paid_devices", user_id)
                 return
 
             now = datetime.now()
-            billing_ts = now.strftime("%Y-%m-%d %H:%M:%S")
+            billing_date = now.date()
 
             daily_cost_cents = self._calculate_daily_cost_cents(total_monthly_cost)
             daily_cost_rub = Decimal(daily_cost_cents) / 100
 
-            billing_result = await asyncio.to_thread(
-                charge_daily_billing_atomic,
+            billing_result = await charge_daily_billing_atomic(
                 user_id,
                 daily_cost_cents,
-                billing_ts,
+                billing_date,
             )
 
             if billing_result is None:
@@ -112,23 +124,12 @@ class BillingEngine:
 
                 await self._deactivate_all_user_devices(user_id)
 
-                try:
-                    from app.bot.dispatcher import dp
-                    bot = dp.bot
-                    await bot.send_message(
-                        ADMIN_ID,
-                        f"<b>Недостаточно средств у пользователя {user_id}</b>\n"
-                        f"Баланс: {balance_before:.2f}р\n"
-                        f"Ежедневный расход: {daily_cost_rub:.2f}р\n"
-                        f"Устройства деактивированы без списания.",
-                        parse_mode="HTML",
-                    )
-                except Exception as notify_err:
-                    logger.error(
-                        "admin_notify_insufficient_funds_failed user_id=%s err=%s",
-                        user_id,
-                        notify_err,
-                    )
+                await self._notify_admin(
+                    f"<b>Недостаточно средств у пользователя {user_id}</b>\n"
+                    f"Баланс: {balance_before:.2f}р\n"
+                    f"Ежедневный расход: {daily_cost_rub:.2f}р\n"
+                    f"Устройства деактивированы без списания."
+                )
                 return
 
             if not billing_result["charged"]:
@@ -153,23 +154,12 @@ class BillingEngine:
                 )
                 await self._deactivate_all_user_devices(user_id)
 
-                try:
-                    from app.bot.dispatcher import dp
-                    bot = dp.bot
-                    await bot.send_message(
-                        ADMIN_ID,
-                        f"<b>Баланс пользователя {user_id} исчерпан</b>\n"
-                        f"Баланс: {new_balance:.2f}р\n"
-                        f"Ежедневный расход: {daily_cost_rub:.2f}р\n"
-                        f"Все устройства деактивированы.",
-                        parse_mode="HTML",
-                    )
-                except Exception as notify_err:
-                    logger.error(
-                        "admin_notify_balance_depleted_failed user_id=%s err=%s",
-                        user_id,
-                        notify_err,
-                    )
+                await self._notify_admin(
+                    f"<b>Баланс пользователя {user_id} исчерпан</b>\n"
+                    f"Баланс: {new_balance:.2f}р\n"
+                    f"Ежедневный расход: {daily_cost_rub:.2f}р\n"
+                    f"Все устройства деактивированы."
+                )
 
         except Exception as e:
             logger.error("billing_process_failed user_id=%s err=%s", user_id, e, exc_info=True)
@@ -220,24 +210,13 @@ class BillingEngine:
             )
 
         if fail_count > 0:
-            try:
-                from app.bot.dispatcher import dp
-                bot = dp.bot
-                await bot.send_message(
-                    ADMIN_ID,
-                    f"<b>Частичная ошибка деактивации устройств</b>\n"
-                    f"Пользователь: <code>{user_id}</code>\n"
-                    f"Успешно: {success_count}\n"
-                    f"Ошибок: {fail_count}",
-                    parse_mode="HTML",
-                )
-            except Exception as admin_notify_err:
-                logger.error(
-                    "billing.deactivate_devices.admin_notify_failed user_id=%s err=%s",
-                    user_id,
-                    admin_notify_err,
-                )
-
+            await self._notify_admin(
+                f"<b>Частичная ошибка деактивации устройств</b>\n"
+                f"Пользователь: <code>{user_id}</code>\n"
+                f"Успешно: {success_count}\n"
+                f"Ошибок: {fail_count}"
+            )
+            
     def start(self):
         """Запускает планировщик биллинга"""
         if not self.scheduler.running:
