@@ -2,7 +2,6 @@
 ## METRON_VPN — Advanced VLESS/V2Ray Telegram Bot Manager
 
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
-[![Async](https://img.shields.io/badge/asyncio-ready-brightgreen)](https://docs.python.org/3/library/asyncio.html)
 
 High performance. Maximum privacy. Zero nonsense.
 
@@ -193,7 +192,7 @@ This project is provided for educational and operational automation purposes. Yo
 ## METRON_VPN — Продвинутый Telegram-бот менеджер VLESS/V2Ray
 
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
-[![Async](https://img.shields.io/badge/asyncio-ready-brightgreen)](https://docs.python.org/3/library/asyncio.html)
+
 
 High Performance & Maximum Privacy — без лишних движений.
 
