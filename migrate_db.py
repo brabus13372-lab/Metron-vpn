@@ -1,10 +1,20 @@
 """
-Одноразовый скрипт миграции данных из SQLite в PostgreSQL.
+Одноразовый скрипт миграции данных из SQLite (старая схема) в PostgreSQL (новая схема).
+
+Старая SQLite-схема (metron.db):
+    users(user_id, username, trial_expired_at, vless_link, uuid, status, notified)
+
+Новая PostgreSQL-схема:
+    users(user_id, username, expire_at, vless_link, uuid,
+          status, notified, balance, last_billing_date, low_balance_notified)
+    devices(id, user_id, device_name, client_uuid, vless_link, monthly_cost, ...)
+    payments — в старой базе нет, пропускаем
 
 Ожидания:
 - Целевая PostgreSQL-база ДОЛЖНА быть пустой по таблицам users/devices/payments.
 - DATABASE_URL в env (обязательно).
 - SQLITE_PATH из env или "metron.db" по умолчанию.
+- DAILY_COST_CENTS из env или 1000 (10 руб/день) по умолчанию.
 """
 
 from __future__ import annotations
@@ -21,6 +31,12 @@ PG_DSN = os.getenv("DATABASE_URL")
 if not PG_DSN:
     raise RuntimeError("DATABASE_URL is not set in environment")
 
+# Стоимость одного дня в копейках (используется для конвертации оставшихся дней → баланс)
+DAILY_COST_CENTS = int(os.getenv("DAILY_COST_CENTS", "1000"))  # default: 10 руб/день
+
+# Статусы допустимые в новой схеме
+VALID_STATUSES = {"NEW", "TRIAL", "ACTIVE", "INACTIVE", "EXPIRED"}
+
 
 def safe_parse_datetime(value: str | None) -> datetime | None:
     """
@@ -35,24 +51,36 @@ def safe_parse_datetime(value: str | None) -> datetime | None:
     candidates = [
         raw,
         raw.replace(" ", "T"),
-        raw[:10] + "T00:00:00" if len(raw) == 10 else None,
+        raw[:10] + "T00:00:00" if len(raw) >= 10 else None,
     ]
 
     for cand in candidates:
         if cand is None:
             continue
         try:
-            return datetime.fromisoformat(cand)
+            dt = datetime.fromisoformat(cand)
+            # Если нет tzinfo — считаем UTC
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
         except (ValueError, TypeError):
             continue
     return None
 
 
-def safe_parse_date(value: str | None) -> str | None:
-    """Извлекает дату (первые 10 символов) из строки SQLite."""
-    if not value:
-        return None
-    return value.strip()[:10]
+def calc_balance_cents(expire: datetime | None, now_utc: datetime) -> int:
+    """Конвертирует оставшиеся дни подписки в копейки для баланса."""
+    if expire is None:
+        return 0
+    days_left = max(0, (expire - now_utc).days)
+    return days_left * DAILY_COST_CENTS
+
+
+def map_status(old_status: str | None) -> str:
+    """Маппит статус из старой схемы в новую."""
+    if old_status in VALID_STATUSES:
+        return old_status
+    return "TRIAL"
 
 
 async def migrate() -> None:
@@ -61,26 +89,31 @@ async def migrate() -> None:
     pg_conn = await asyncpg.connect(PG_DSN)
 
     try:
+        now_utc = datetime.now(timezone.utc)
         counts_before: dict[str, int] = {}
         counts_after: dict[str, int] = {}
-        now_utc = datetime.now(timezone.utc)
+
+        # Читаем старую базу
+        users = sql_conn.execute("SELECT * FROM users").fetchall()
+        counts_before["users"] = len(users)
+        counts_before["devices"] = sum(1 for u in users if u["uuid"] and u["vless_link"])
+        counts_before["payments"] = 0  # в старой базе payments не было
 
         async with pg_conn.transaction():
-            # ----- users -----
-            users = sql_conn.execute("SELECT * FROM users").fetchall()
-            counts_before["users"] = len(users)
 
+            # ----- users -----
             for u in users:
                 expire = safe_parse_datetime(u["trial_expired_at"])
-                last_bill = safe_parse_date(u["last_billing_date"])
+                balance_cents = calc_balance_cents(expire, now_utc)
+                status = map_status(u["status"])
 
                 await pg_conn.execute(
                     """
                     INSERT INTO users (
                         user_id, username, expire_at, vless_link, uuid,
-                        status, notified, balance, last_billing_date
+                        status, notified, balance, last_billing_date, low_balance_notified
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::date)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, FALSE)
                     ON CONFLICT (user_id) DO NOTHING
                     """,
                     u["user_id"],
@@ -88,97 +121,85 @@ async def migrate() -> None:
                     expire,
                     u["vless_link"],
                     u["uuid"],
-                    u["status"],
+                    status,
                     bool(u["notified"]),
-                    u["balance"],
-                    last_bill,
+                    balance_cents,
                 )
 
-            # ----- devices -----
-            devices = sql_conn.execute("SELECT * FROM devices").fetchall()
-            counts_before["devices"] = len(devices)
-
-            for d in devices:
-                created = safe_parse_datetime(d["created_at"]) or now_utc
+            # ----- devices (создаём 1 устройство на юзера из старых данных) -----
+            for u in users:
+                if not u["uuid"] or not u["vless_link"]:
+                    continue
 
                 await pg_conn.execute(
                     """
-                    INSERT INTO devices (
-                        id, user_id, device_name, client_uuid,
-                        vless_link, monthly_cost, created_at
-                    )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
-                    ON CONFLICT (id) DO NOTHING
+                    INSERT INTO devices (user_id, device_name, client_uuid, vless_link, monthly_cost)
+                    VALUES ($1, 'Основное', $2, $3, $4)
+                    ON CONFLICT (client_uuid) DO NOTHING
                     """,
-                    d["id"],
-                    d["user_id"],
-                    d["device_name"],
-                    d["client_uuid"],
-                    d["vless_link"],
-                    d["monthly_cost"],
-                    created,
+                    u["user_id"],
+                    u["uuid"],
+                    u["vless_link"],
+                    DAILY_COST_CENTS * 30,  # monthly_cost = 30 дней
                 )
 
-            # ----- payments -----
-            payments = sql_conn.execute("SELECT * FROM payments").fetchall()
-            counts_before["payments"] = len(payments)
-
-            for p in payments:
-                created = safe_parse_datetime(p["created_at"]) or now_utc
+            # ----- balance_transactions — фиксируем начисленный баланс как BONUS -----
+            for u in users:
+                expire = safe_parse_datetime(u["trial_expired_at"])
+                balance_cents = calc_balance_cents(expire, now_utc)
+                if balance_cents <= 0:
+                    continue
 
                 await pg_conn.execute(
                     """
-                    INSERT INTO payments (
-                        id, user_id, payload, telegram_charge_id,
-                        provider_charge_id, amount, created_at
+                    INSERT INTO balance_transactions (
+                        user_id, kind, amount_cents,
+                        balance_before, balance_after,
+                        reference_type, reference_id, idempotency_key
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
-                    ON CONFLICT (id) DO NOTHING
+                    VALUES ($1, 'BONUS', $2, 0, $2, 'migration', 'sqlite_import', $3)
+                    ON CONFLICT (idempotency_key) DO NOTHING
                     """,
-                    p["id"],
-                    p["user_id"],
-                    p["payload"],
-                    p["telegram_charge_id"],
-                    p["provider_charge_id"],
-                    p["amount"],
-                    created,
+                    u["user_id"],
+                    balance_cents,
+                    f"migration:{u['user_id']}",
                 )
+
+        # ----- синхронизация sequences для devices -----
+        seq_name = await pg_conn.fetchval(
+            "SELECT pg_get_serial_sequence($1, 'id')", "devices"
+        )
+        if seq_name:
+            await pg_conn.execute(
+                f"SELECT setval('{seq_name}', COALESCE((SELECT MAX(id) FROM devices), 1), true)"
+            )
 
         # ----- сверка row counts -----
         for table in ("users", "devices", "payments"):
             counts_after[table] = await pg_conn.fetchval(f"SELECT COUNT(*) FROM {table}")
 
-        # ----- динамическая синхронизация sequences -----
-        for table in ("devices", "payments"):
-            seq_name = await pg_conn.fetchval(
-                "SELECT pg_get_serial_sequence($1, 'id')",
-                table,
-            )
-            if seq_name:
-                await pg_conn.execute(
-                    f"SELECT setval('{seq_name}', COALESCE((SELECT MAX(id) FROM {table}), 1), true)"
-                )
-
         # ----- вывод итогов -----
         has_mismatch = False
-        print("=" * 55)
+        print("=" * 60)
         print("Миграция завершена.")
-        print(f"{'Таблица':<12} {'SQLite':>8} {'PostgreSQL':>12} {'Статус':>12}")
-        print("-" * 55)
+        print(f"DAILY_COST_CENTS = {DAILY_COST_CENTS} ({DAILY_COST_CENTS / 100:.2f} руб/день)")
+        print(f"{'Таблица':<16} {'SQLite':>8} {'PostgreSQL':>12} {'Статус':>10}")
+        print("-" * 60)
 
         for table in ("users", "devices", "payments"):
             before = counts_before.get(table, 0)
             after = counts_after.get(table, 0)
-            status = "✓ OK" if before == after else "✗ MISMATCH"
-            if before != after:
+            ok = before == after
+            status_str = "✓ OK" if ok else "✗ MISMATCH"
+            if not ok:
                 has_mismatch = True
-            print(f"{table:<12} {before:>8} {after:>12} {status:>12}")
+            print(f"{table:<16} {before:>8} {after:>12} {status_str:>10}")
 
-        print("=" * 55)
+        print("=" * 60)
 
         if has_mismatch:
             raise RuntimeError(
-                f"Row count mismatch detected! Counts: {counts_before} -> {counts_after}"
+                f"Row count mismatch detected! {counts_before} -> {counts_after}"
             )
 
     finally:
