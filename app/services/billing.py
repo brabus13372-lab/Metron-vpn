@@ -1,19 +1,20 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 
+from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.config import ADMIN_ID
 from app.db import (
-    get_all_users_with_devices,
-    get_user_total_monthly_cost,
     charge_daily_billing_atomic,
-    get_expired_trial_users,
-    update_user_status,
-    get_user_devices,
     deactivate_device,
+    get_all_users_with_devices,
+    get_expired_trial_users,
+    get_user_devices,
+    get_user_total_monthly_cost,
+    update_user_status,
 )
 from app.services.vpn import deactivate_all_user_devices
 
@@ -24,17 +25,22 @@ class BillingEngine:
     """
     Billing engine: charges users daily for their active devices.
     If balance reaches zero or is insufficient — deactivates all devices.
-    Also handles trial expiry: deactivates devices and sets status to EXPIRED.
+    Also handles trial expiry.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
+        self._bot: Bot | None = None
         self._setup_jobs()
 
-    def _setup_jobs(self):
+    def set_bot(self, bot: Bot) -> None:
+        """Передаём Bot-инстанс при старте приложения."""
+        self._bot = bot
+
+    def _setup_jobs(self) -> None:
         self.scheduler.add_job(
             self._daily_billing_cycle,
-            trigger=CronTrigger(hour=0, minute=5),
+            trigger=CronTrigger(hour=0, minute=5, timezone="Europe/Moscow"),
             id="daily_billing",
             name="Daily device charge",
             replace_existing=True,
@@ -42,11 +48,9 @@ class BillingEngine:
             coalesce=True,
             misfire_grace_time=3600,
         )
-        logger.info("Billing engine: daily charge job scheduled at 00:05")
-
         self.scheduler.add_job(
             self._trial_expiry_cycle,
-            trigger=CronTrigger(hour=0, minute=10),
+            trigger=CronTrigger(hour=0, minute=10, timezone="Europe/Moscow"),
             id="trial_expiry",
             name="Trial expiry deactivation",
             replace_existing=True,
@@ -54,46 +58,39 @@ class BillingEngine:
             coalesce=True,
             misfire_grace_time=3600,
         )
-        logger.info("Billing engine: trial expiry job scheduled at 00:10")
+        logger.info("Billing jobs scheduled: billing=00:05 MSK, trial=00:10 MSK")
 
     # -----------------------------------------------------------------------
     # Helpers
     # -----------------------------------------------------------------------
 
     def _calculate_daily_cost_cents(self, monthly_cost_rub: Decimal) -> int:
-        """
-        Converts monthly cost (RUB) to a daily charge in kopecks.
-        Rounding: ROUND_HALF_UP to nearest kopeck.
-        """
         daily_rub = (monthly_cost_rub / Decimal("30")).quantize(
-            Decimal("0.01"),
-            rounding=ROUND_HALF_UP,
+            Decimal("0.01"), rounding=ROUND_HALF_UP
         )
         return int(daily_rub * 100)
 
     async def _notify_admin(self, text: str) -> None:
-        if not ADMIN_ID:
+        if not ADMIN_ID or not self._bot:
             return
         try:
-            from app.bot.dispatcher import dp  # noqa: PLC0415  (circular-import workaround)
-            await dp.bot.send_message(ADMIN_ID, text, parse_mode="HTML")
+            await self._bot.send_message(ADMIN_ID, text, parse_mode="HTML")
         except Exception as exc:
-            logger.error("billing.admin_notify_failed err=%s", exc, exc_info=True)
+            logger.error("billing.admin_notify_failed err=%s", exc)
 
     async def _notify_user(self, user_id: int, text: str) -> None:
+        if not self._bot:
+            return
         try:
-            from app.bot.dispatcher import dp  # noqa: PLC0415
-            await dp.bot.send_message(user_id, text)
+            await self._bot.send_message(user_id, text)
         except Exception as exc:
-            logger.error(
-                "billing.user_notify_failed user_id=%s err=%s", user_id, exc
-            )
+            logger.error("billing.user_notify_failed user_id=%s err=%s", user_id, exc)
 
     # -----------------------------------------------------------------------
     # Daily billing
     # -----------------------------------------------------------------------
 
-    async def _daily_billing_cycle(self):
+    async def _daily_billing_cycle(self) -> None:
         logger.info("billing.daily_cycle.start")
         try:
             user_ids = await get_all_users_with_devices()
@@ -110,14 +107,17 @@ class BillingEngine:
         except Exception as exc:
             logger.error("billing.daily_cycle.critical_error err=%s", exc, exc_info=True)
 
-    async def _process_user_billing(self, user_id: int):
+    async def _process_user_billing(self, user_id: int) -> None:
         try:
             total_monthly_cost = await get_user_total_monthly_cost(user_id)
             if total_monthly_cost <= Decimal("0"):
                 logger.debug("billing.skip user_id=%s reason=no_paid_devices", user_id)
                 return
 
-            billing_date = datetime.now().date()
+            # ИСПРАВЛЕНО: используем дату по Москве, а не UTC
+            from zoneinfo import ZoneInfo
+            billing_date = datetime.now(ZoneInfo("Europe/Moscow")).date()
+
             daily_cost_cents = self._calculate_daily_cost_cents(total_monthly_cost)
             daily_cost_rub = Decimal(daily_cost_cents) / 100
 
@@ -138,15 +138,15 @@ class BillingEngine:
 
             if billing_result["insufficient_funds"]:
                 logger.warning(
-                    "billing.insufficient_funds user_id=%s balance=%s daily_cost=%s monthly_cost=%s",
-                    user_id, balance_before, daily_cost_rub, total_monthly_cost,
+                    "billing.insufficient_funds user_id=%s balance=%s daily=%s",
+                    user_id, balance_before, daily_cost_rub,
                 )
                 await self._deactivate_all_user_devices(user_id)
                 await self._notify_admin(
                     f"<b>Недостаточно средств у пользователя {user_id}</b>\n"
                     f"Баланс: {balance_before:.2f}р\n"
                     f"Ежедневный расход: {daily_cost_rub:.2f}р\n"
-                    f"Устройства деактивированы без списания."
+                    "Устройства деактивированы без списания."
                 )
                 return
 
@@ -155,21 +155,17 @@ class BillingEngine:
                 return
 
             logger.info(
-                "billing.charged user_id=%s balance_before=%s daily_cost=%s monthly_cost=%s balance_after=%s",
-                user_id, balance_before, daily_cost_rub, total_monthly_cost, new_balance,
+                "billing.charged user_id=%s before=%s daily=%s after=%s",
+                user_id, balance_before, daily_cost_rub, new_balance,
             )
 
-            if new_balance == Decimal("0"):
-                logger.warning(
-                    "billing.balance_depleted user_id=%s balance_after=%s daily_cost=%s",
-                    user_id, new_balance, daily_cost_rub,
-                )
+            if new_balance <= Decimal("0"):
                 await self._deactivate_all_user_devices(user_id)
                 await self._notify_admin(
                     f"<b>Баланс пользователя {user_id} исчерпан</b>\n"
                     f"Баланс: {new_balance:.2f}р\n"
                     f"Ежедневный расход: {daily_cost_rub:.2f}р\n"
-                    f"Все устройства деактивированы."
+                    "Все устройства деактивированы."
                 )
 
         except Exception as exc:
@@ -179,7 +175,7 @@ class BillingEngine:
     # Trial expiry
     # -----------------------------------------------------------------------
 
-    async def _trial_expiry_cycle(self):
+    async def _trial_expiry_cycle(self) -> None:
         logger.info("trial_expiry.cycle.start")
         try:
             user_ids = await get_expired_trial_users()
@@ -188,10 +184,8 @@ class BillingEngine:
                 return
 
             logger.info("trial_expiry.cycle.users_found count=%s", len(user_ids))
-
             for user_id in user_ids:
                 await self._process_trial_expiry(user_id)
-
             logger.info("trial_expiry.cycle.done")
         except Exception as exc:
             logger.error("trial_expiry.cycle.critical_error err=%s", exc, exc_info=True)
@@ -200,33 +194,22 @@ class BillingEngine:
         try:
             logger.info("trial_expiry.start user_id=%s", user_id)
 
-            # deactivate_all_user_devices returns (success_count, fail_count, errors)
-            success_count, fail_count, _errors = await deactivate_all_user_devices(user_id)
+            # просто меняем статус, устройства не трогаем
+            await update_user_status(user_id, "ACTIVE")
 
-            devices = await get_user_devices(user_id)
-            for dev in devices:
-                await deactivate_device(dev["id"], user_id, reason="trial_expired")
-
-            await update_user_status(user_id, "EXPIRED")
-
-            logger.info(
-                "trial_expiry.done user_id=%s devices_ok=%s devices_fail=%s",
-                user_id, success_count, fail_count,
-            )
+            logger.info("trial_expiry.done user_id=%s", user_id)
 
             await self._notify_user(
                 user_id,
                 "Ваш бесплатный пробный период закончился.\n"
-                "Доступ к VPN отключён.\n"
-                "Чтобы продолжить пользоваться VPN, пополните баланс и подключите устройство.",
+                "Теперь доступ к VPN тарифицируется ежедневно.\n"
+                "Пополните баланс в профиле, чтобы не потерять доступ."
             )
 
             await self._notify_admin(
                 f"<b>Триал истёк</b>\n"
                 f"Пользователь: <code>{user_id}</code>\n"
-                f"Устройств отключено: {success_count}\n"
-                f"Ошибок: {fail_count}\n"
-                f"Статус → EXPIRED"
+                f"Статус → ACTIVE, устройства продолжают работать."
             )
 
         except Exception as exc:
@@ -236,14 +219,10 @@ class BillingEngine:
     # Device deactivation (billing-triggered)
     # -----------------------------------------------------------------------
 
-    async def _deactivate_all_user_devices(self, user_id: int):
-        """
-        Disables all user devices in 3X-UI panel and marks them inactive in DB.
-        Notifies the user via bot.
-        """
+    async def _deactivate_all_user_devices(self, user_id: int) -> None:
         logger.info("billing.deactivate_devices.start user_id=%s", user_id)
 
-        # deactivate_all_user_devices returns (success_count, fail_count) — no errors list
+        # ИСПРАВЛЕНО: единообразно 3 значения
         success_count, fail_count = await deactivate_all_user_devices(user_id)
 
         devices = await get_user_devices(user_id)
@@ -255,18 +234,15 @@ class BillingEngine:
             user_id, success_count, fail_count,
         )
 
-        if fail_count == 0:
-            user_text = (
-                "Ваш баланс исчерпан или недостаточен для продления устройств.\n"
-                "Все VPN-подключения временно отключены.\n"
-                "Пополните баланс в профиле, чтобы восстановить доступ."
-            )
-        else:
-            user_text = (
-                "Ваш баланс исчерпан или недостаточен для продления устройств.\n"
-                "Мы попытались отключить VPN-подключения, но часть операций могла завершиться с ошибкой.\n"
-                "Пополните баланс в профиле и при необходимости обратитесь в поддержку."
-            )
+        user_text = (
+            "Ваш баланс исчерпан или недостаточен для продления устройств.\n"
+            "Все VPN-подключения временно отключены.\n"
+            "Пополните баланс в профиле, чтобы восстановить доступ."
+            if fail_count == 0 else
+            "Ваш баланс исчерпан или недостаточен для продления устройств.\n"
+            "Мы попытались отключить VPN-подключения, но часть операций могла завершиться с ошибкой.\n"
+            "Пополните баланс и при необходимости обратитесь в поддержку."
+        )
 
         await self._notify_user(user_id, user_text)
 
@@ -282,16 +258,15 @@ class BillingEngine:
     # Lifecycle
     # -----------------------------------------------------------------------
 
-    def start(self):
+    def start(self) -> None:
         if not self.scheduler.running:
             self.scheduler.start()
             logger.info("Billing engine started")
 
-    def stop(self):
+    def stop(self) -> None:
         if self.scheduler.running:
             self.scheduler.shutdown()
             logger.info("Billing engine stopped")
 
 
-# Global billing engine instance
 billing_engine = BillingEngine()

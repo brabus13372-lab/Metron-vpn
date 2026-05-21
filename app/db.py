@@ -180,13 +180,13 @@ class Database:
             await conn.execute(create_users)
             await conn.execute(create_devices)
             await conn.execute(create_payments)
-            await conn.execute(create_indexes)
-            await conn.execute(create_active_device_indexes)
-            await conn.execute(alter_devices)
+            await conn.execute(alter_devices)           # ← сначала добавляем колонки
             await conn.execute(alter_payments)
             await conn.execute(alter_users_notifications)
             await conn.execute(create_balance_transactions)
-            await conn.execute(create_balance_indexes)        
+            await conn.execute(create_indexes)          # ← потом индексы
+            await conn.execute(create_active_device_indexes)  # ← теперь is_active уже есть
+            await conn.execute(create_balance_indexes)      
 
     @staticmethod
     def _cents_to_rubles(cents: int) -> Decimal:
@@ -798,6 +798,7 @@ class Database:
             )
             return [r["user_id"] for r in rows]
 
+    # ФИКС
     async def get_user_total_monthly_cost(self, user_id: int) -> Decimal:
         async with self.connection() as conn:
             row = await conn.fetchrow(
@@ -805,6 +806,7 @@ class Database:
                 SELECT COALESCE(SUM(monthly_cost), 0) AS total
                 FROM devices
                 WHERE user_id = $1
+                AND is_active = TRUE
                 """,
                 user_id,
             )

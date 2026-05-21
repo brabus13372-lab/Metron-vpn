@@ -50,12 +50,16 @@ if __name__ == "__main__":
 
         await init_db()
         bot = Bot(token=BOT_TOKEN)
+
         scheduler = AsyncIOScheduler()
         scheduler.add_job(check_notifications, "interval", minutes=10, args=[bot])
         scheduler.start()
 
         startup_check_task = asyncio.create_task(check_notifications(bot))
         startup_check_task.add_done_callback(_log_task_exception)
+
+        # ИСПРАВЛЕНО: передаём bot до старта, иначе уведомления молча не работают
+        billing_engine.set_bot(bot)
         billing_engine.start()
 
         logging.info("MetronVPN запущен и готов к работе.")

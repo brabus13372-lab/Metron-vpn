@@ -25,7 +25,13 @@ VLESS_TYPE = os.getenv("VLESS_TYPE", "tcp")
 VLESS_PBK = os.getenv("VLESS_PBK")
 VLESS_SID = os.getenv("VLESS_SID")
 
-PAYMENT_AMOUNT = int(DEVICE_MONTHLY_COST * 100)
+PAYMENT_AMOUNT = int(DEVICE_MONTHLY_COST * 100)  # базовая сумма (1 месяц)
+PAYMENT_AMOUNTS = [
+    PAYMENT_AMOUNT,          # 1 месяц
+    PAYMENT_AMOUNT * 2,      # 2 месяца
+    PAYMENT_AMOUNT * 3,      # 3 месяца
+    PAYMENT_AMOUNT * 6,      # 6 месяцев
+]
 
 TZ_NSK = ZoneInfo("Asia/Novosibirsk")
 TZ_MSK = ZoneInfo("Europe/Moscow")

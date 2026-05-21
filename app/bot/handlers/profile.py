@@ -1,18 +1,49 @@
+import asyncio
 import html
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 
-from aiogram import types
+from aiogram import F, types
+from aiogram.filters import StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from app.config import ADMIN_ID, TZ_MSK, TZ_NSK
-from app.db import get_user_data_dict, get_user_balance, get_user_devices
+from app.bot.dispatcher import dp
+from app.config import ADMIN_ID, DEVICE_MONTHLY_COST, TZ_MSK, TZ_NSK
+from app.db import (
+    add_device,
+    get_user_balance,
+    get_user_data_dict,
+    get_user_devices,
+    remove_device,
+    update_user_link,
+)
+
+from app.services.vpn import (
+    add_device_to_panel,
+    remove_device_from_panel,
+    rotate_client_uuid,
+)
+from app.vless import build_vless_link
 
 logger = logging.getLogger(__name__)
 
 DAYS_IN_MONTH = Decimal("30")
 
+
+# ---------------------------------------------------------------------------
+# FSM
+# ---------------------------------------------------------------------------
+
+class DeviceState(StatesGroup):
+    waiting_device_name = State()
+
+
+# ---------------------------------------------------------------------------
+# Вспомогательные функции
+# ---------------------------------------------------------------------------
 
 def _build_profile_kb(user_id: int) -> types.InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
@@ -57,6 +88,10 @@ def _calculate_days_left(balance_rub: Decimal, monthly_cost_rub: Decimal) -> Dec
     if daily_cost_rub <= Decimal("0"):
         return None
     return (balance_rub / daily_cost_rub).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+
+
+def _daily_cost_from_monthly(monthly_cost: Decimal) -> Decimal:
+    return (monthly_cost / Decimal("30")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 def _build_devices_text(devices: list[dict]) -> tuple[str, int, Decimal]:
@@ -136,11 +171,7 @@ def _build_access_block(
 
         days_left = _calculate_days_left(balance_rub, total_monthly_rub)
         days_left_text = f"{days_left:.1f} дн." if days_left is not None else "Не рассчитывается"
-
-        if balance_rub > Decimal("0"):
-            status_text = "✅ Активна"
-        else:
-            status_text = "⚠️ Отключена (Недостаточно средств)"
+        status_text = "✅ Активна" if balance_rub > Decimal("0") else "⚠️ Отключена (Недостаточно средств)"
 
         return (
             f"<b>🚀 Статус:</b> {status_text}\n"
@@ -207,7 +238,6 @@ async def _render_profile(user_id: int) -> tuple[str, types.InlineKeyboardMarkup
     return text, _build_profile_kb(user_id)
 
 
-
 # ---------------------------------------------------------------------------
 # Профиль
 # ---------------------------------------------------------------------------
@@ -239,17 +269,7 @@ async def handle_update_key(call: types.CallbackQuery) -> None:
         return
 
     old_uuid = user["uuid"]
-    expire_at = user.get("expire_at")
     clean_username = user.get("username") or call.from_user.username or f"user_{user_id}"
-
-    if isinstance(expire_at, datetime):
-        if expire_at.tzinfo is None:
-            expire_at = expire_at.replace(tzinfo=timezone.utc)
-        else:
-            expire_at = expire_at.astimezone(timezone.utc)
-        target_ts = int(expire_at.timestamp() * 1000)
-    else:
-        target_ts = int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp() * 1000)
 
     success, new_uuid, err = await rotate_client_uuid(
         old_uuid,
@@ -297,16 +317,18 @@ async def manage_devices_menu(call: types.CallbackQuery) -> None:
         is_active = bool(dev.get("is_active", True))
         if is_active:
             active_count += 1
-            total_monthly += dev.get("monthly_cost", Decimal("0.00"))
+            mc = dev.get("monthly_cost", Decimal("0.00"))
+            total_monthly += mc if isinstance(mc, Decimal) else _money(mc)
 
         status_icon = "🟢" if is_active else "🔴"
         status_suffix = "активно" if is_active else "выключено"
+        mc = dev.get("monthly_cost", Decimal("0.00"))
 
         builder.row(
             types.InlineKeyboardButton(
                 text=(
                     f"{status_icon} {dev['device_name']} "
-                    f"({dev['monthly_cost']:.2f}р/мес, {status_suffix})"
+                    f"({mc:.2f}р/мес, {status_suffix})"
                 ),
                 callback_data=f"device_info_{dev['id']}",
             )
@@ -333,15 +355,12 @@ async def manage_devices_menu(call: types.CallbackQuery) -> None:
         "Списание идёт только по активным устройствам.</i>"
     )
 
-    await call.message.edit_text(
-        text,
-        parse_mode="HTML",
-        reply_markup=builder.as_markup(),
-    )
+    await call.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
     await call.answer()
 
+
 # ---------------------------------------------------------------------------
-# Добавление устройства (FSM aiogram 3.x)
+# Добавление устройства (FSM)
 # ---------------------------------------------------------------------------
 
 def _device_add_cancel_kb() -> types.InlineKeyboardMarkup:
@@ -361,10 +380,6 @@ def _device_added_kb() -> types.InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(types.InlineKeyboardButton(text="◀️ К устройствам", callback_data="manage_devices"))
     return builder.as_markup()
-
-
-def _daily_cost_from_monthly(monthly_cost: Decimal) -> Decimal:
-    return (monthly_cost / Decimal("30")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 def _can_add_device(user: dict | None, balance: Decimal) -> tuple[bool, str | None]:
@@ -401,9 +416,7 @@ async def device_add_start(call: types.CallbackQuery, state: FSMContext) -> None
     if not allowed:
         await state.clear()
         await call.message.edit_text(
-            error_text,
-            parse_mode="HTML",
-            reply_markup=_device_connect_first_kb(),
+            error_text, parse_mode="HTML", reply_markup=_device_connect_first_kb()
         )
         await call.answer()
         return
@@ -422,21 +435,17 @@ async def device_add_start(call: types.CallbackQuery, state: FSMContext) -> None
         "<i>Для отмены нажмите кнопку ниже или отправьте /cancel</i>"
     )
 
-    await call.message.edit_text(
-        text,
-        parse_mode="HTML",
-        reply_markup=_device_add_cancel_kb(),
-    )
+    await call.message.edit_text(text, parse_mode="HTML", reply_markup=_device_add_cancel_kb())
     await call.answer()
 
 
-@dp.message(DeviceState.waiting_device_name, F.text == "/cancel")
+@dp.message(StateFilter(DeviceState.waiting_device_name), F.text == "/cancel")
 async def device_add_cancel(message: types.Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer("❌ Добавление устройства отменено.")
 
 
-@dp.message(DeviceState.waiting_device_name, F.text)
+@dp.message(StateFilter(DeviceState.waiting_device_name), F.text)
 async def device_add_confirm(message: types.Message, state: FSMContext) -> None:
     user_id = message.from_user.id
     clean_device_name = (message.text or "").strip()
@@ -469,9 +478,7 @@ async def device_add_confirm(message: types.Message, state: FSMContext) -> None:
         if error or not vless_link or not client_uuid:
             logger.warning(
                 "device_add_panel_failed user_id=%s device_name=%r error=%r",
-                user_id,
-                clean_device_name,
-                error,
+                user_id, clean_device_name, error,
             )
             await state.clear()
             await message.answer(
@@ -480,7 +487,9 @@ async def device_add_confirm(message: types.Message, state: FSMContext) -> None:
             )
             return
 
-        monthly_cost_cents = int((DEVICE_MONTHLY_COST * Decimal("100")).to_integral_value(rounding=ROUND_HALF_UP))
+        monthly_cost_cents = int(
+            (DEVICE_MONTHLY_COST * Decimal("100")).to_integral_value(rounding=ROUND_HALF_UP)
+        )
 
         dev_id = await add_device(
             user_id=user_id,
@@ -496,9 +505,7 @@ async def device_add_confirm(message: types.Message, state: FSMContext) -> None:
     except Exception as e:
         logger.exception(
             "device_add_failed user_id=%s device_name=%r err=%s",
-            user_id,
-            clean_device_name,
-            e,
+            user_id, clean_device_name, e,
         )
 
         if client_uuid:
@@ -507,8 +514,7 @@ async def device_add_confirm(message: types.Message, state: FSMContext) -> None:
             except Exception:
                 logger.exception(
                     "device_add_rollback_failed user_id=%s client_uuid=%s",
-                    user_id,
-                    client_uuid,
+                    user_id, client_uuid,
                 )
 
         await state.clear()
@@ -519,24 +525,18 @@ async def device_add_confirm(message: types.Message, state: FSMContext) -> None:
 
     logger.info(
         "device_added_successfully user_id=%s device_id=%s device_name=%r",
-        user_id,
-        dev_id,
-        clean_device_name,
+        user_id, dev_id, clean_device_name,
     )
 
     monthly_cost = DEVICE_MONTHLY_COST
     daily_cost = _daily_cost_from_monthly(monthly_cost)
 
-    text = (
+    await message.answer(
         "✅ <b>Устройство успешно добавлено!</b>\n\n"
         f"<b>📱 Название:</b> {html.escape(clean_device_name)}\n"
         f"<b>💰 Стоимость:</b> {monthly_cost:.2f} руб/мес (~{daily_cost:.2f} руб/день)\n"
         f"<b>🔑 Ключ устройства:</b>\n<code>{html.escape(vless_link)}</code>\n\n"
-        f"<i>Списания будут идти только пока устройство активно.</i>"
-    )
-
-    await message.answer(
-        text,
+        "<i>Списания будут идти только пока устройство активно.</i>",
         parse_mode="HTML",
         reply_markup=_device_added_kb(),
     )
@@ -550,49 +550,55 @@ async def device_add_confirm(message: types.Message, state: FSMContext) -> None:
 async def device_info(call: types.CallbackQuery) -> None:
     user_id = call.from_user.id
     try:
-        dev_id = int(call.data.split("_")[2])
+        # "device_info_123" → split("_", 2) → ["device", "info", "123"]
+        dev_id = int(call.data.split("_", 2)[2])
     except (IndexError, ValueError):
         return await call.answer("❌ Ошибка данных", show_alert=True)
 
-    devices = await asyncio.to_thread(get_user_devices, user_id)
-    device  = next((d for d in devices if d["id"] == dev_id), None)
+    devices = await get_user_devices(user_id)
+    device = next((d for d in devices if d["id"] == dev_id), None)
 
     if not device:
         return await call.answer("❌ Устройство не найдено", show_alert=True)
 
     monthly_cost = device["monthly_cost"]
-    daily_cost   = (monthly_cost / Decimal(30)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    daily_cost = _daily_cost_from_monthly(monthly_cost)
+
+    created_at = device.get("created_at")
+    created_at = _to_aware_utc(created_at) if isinstance(created_at, datetime) else None
+    created_text = created_at.astimezone(TZ_MSK).strftime("%d.%m.%Y %H:%M") if created_at else "—"
 
     builder = InlineKeyboardBuilder()
     builder.row(types.InlineKeyboardButton(text="🗑️ Удалить устройство", callback_data=f"device_delete_{dev_id}"))
-    builder.row(types.InlineKeyboardButton(text="◀️ Назад",              callback_data="manage_devices"))
+    builder.row(types.InlineKeyboardButton(text="◀️ Назад", callback_data="manage_devices"))
 
     text = (
         f"<b>📱 Устройство: {html.escape(device['device_name'])}</b>\n\n"
         f"<b>🆔 UUID:</b> <code>{device['client_uuid']}</code>\n"
         f"<b>💰 Стоимость:</b> {monthly_cost:.2f} руб/мес (~{daily_cost:.2f} руб/день)\n"
-        f"<b>📅 Создано:</b> {device['created_at']}\n\n"
+        f"<b>📅 Создано:</b> {created_text}\n\n"
         f"<b>🔑 Ключ:</b>\n<code>{html.escape(device['vless_link'] or 'Нет')}</code>\n\n"
-        f"<i>При удалении устройство будет отключено.</i>"
+        "<i>При удалении устройство будет отключено.</i>"
     )
     await call.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
     await call.answer()
 
 
 # ---------------------------------------------------------------------------
-# Удаление устройства — подтверждение (регистрируем ПЕРВЫМ, до общего prefix)
+# Удаление устройства — подтверждение (ПЕРВЫМ, до общего prefix)
 # ---------------------------------------------------------------------------
 
 @dp.callback_query(F.data.startswith("device_delete_confirmed_"))
 async def device_delete_final(call: types.CallbackQuery) -> None:
     user_id = call.from_user.id
     try:
-        dev_id = int(call.data.split("_")[3])
+        # "device_delete_confirmed_123" → split("_", 3) → ["device", "delete", "confirmed", "123"]
+        dev_id = int(call.data.split("_", 3)[3])
     except (IndexError, ValueError):
         return await call.answer("❌ Ошибка данных", show_alert=True)
 
-    devices = await asyncio.to_thread(get_user_devices, user_id)
-    device  = next((d for d in devices if d["id"] == dev_id), None)
+    devices = await get_user_devices(user_id)
+    device = next((d for d in devices if d["id"] == dev_id), None)
 
     if not device:
         return await call.answer("❌ Устройство не найдено", show_alert=True)
@@ -608,7 +614,7 @@ async def device_delete_final(call: types.CallbackQuery) -> None:
             show_alert=True,
         )
 
-    removed = await asyncio.to_thread(remove_device, dev_id, user_id)
+    removed = await remove_device(dev_id, user_id)
 
     if removed:
         logger.info("Device '%s' (ID: %s) deleted for user %s", device["device_name"], dev_id, user_id)
@@ -616,7 +622,7 @@ async def device_delete_final(call: types.CallbackQuery) -> None:
         builder.row(types.InlineKeyboardButton(text="◀️ Назад", callback_data="manage_devices"))
         await call.message.edit_text(
             f"✅ <b>Устройство '{html.escape(device['device_name'])}' удалено</b>\n\n"
-            f"Клиент деактивирован, запись удалена.",
+            "Клиент деактивирован, запись удалена.",
             parse_mode="HTML",
             reply_markup=builder.as_markup(),
         )
@@ -631,24 +637,25 @@ async def device_delete_final(call: types.CallbackQuery) -> None:
 async def device_delete_confirm(call: types.CallbackQuery) -> None:
     user_id = call.from_user.id
     try:
-        dev_id = int(call.data.split("_")[2])
+        # "device_delete_123" → split("_", 2) → ["device", "delete", "123"]
+        dev_id = int(call.data.split("_", 2)[2])
     except (IndexError, ValueError):
         return await call.answer("❌ Ошибка данных", show_alert=True)
 
-    devices = await asyncio.to_thread(get_user_devices, user_id)
-    device  = next((d for d in devices if d["id"] == dev_id), None)
+    devices = await get_user_devices(user_id)
+    device = next((d for d in devices if d["id"] == dev_id), None)
 
     if not device:
         return await call.answer("❌ Устройство не найдено", show_alert=True)
 
     builder = InlineKeyboardBuilder()
     builder.row(types.InlineKeyboardButton(text="🗑️ Да, удалить", callback_data=f"device_delete_confirmed_{dev_id}"))
-    builder.row(types.InlineKeyboardButton(text="◀️ Отмена",      callback_data=f"device_info_{dev_id}"))
+    builder.row(types.InlineKeyboardButton(text="◀️ Отмена", callback_data=f"device_info_{dev_id}"))
 
     text = (
         f"⚠️ <b>Удалить устройство '{html.escape(device['device_name'])}'?</b>\n\n"
-        f"Это действие отключит клиент в панели и удалит запись из БД.\n"
-        f"Восстановить ключ будет невозможно."
+        "Это действие отключит клиент в панели и удалит запись из БД.\n"
+        "Восстановить ключ будет невозможно."
     )
     await call.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
     await call.answer()
