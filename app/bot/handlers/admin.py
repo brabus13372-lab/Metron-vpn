@@ -8,6 +8,7 @@ from aiogram import Bot, types, F
 from aiogram.filters import Command, BaseFilter
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from app.services.vpn import activate_all_user_devices
 from app.bot.dispatcher import dp
 from app.config import ADMIN_ID
 from app.db import (
@@ -16,6 +17,7 @@ from app.db import (
     add_balance_atomic,
     get_user_balance,
     update_user_status,
+    get_user_devices,
 )
 
 logger = logging.getLogger(__name__)
@@ -82,6 +84,28 @@ async def admin_give_balance(message: types.Message, bot: Bot) -> None:
         f"💼 Новый баланс: <b>{new_balance_rub:.2f} руб.</b>",
         parse_mode="HTML",
     )
+
+    # Реактивируем устройства если были деактивированы из-за баланса
+    devices = await get_user_devices(target_id)
+    inactive = [d for d in devices if not d["is_active"] and d.get("disabled_reason") == "insufficient_funds"]
+
+    if inactive:
+        success_count, fail_count, _ = await activate_all_user_devices(target_id)
+        async with get_db().connection() as conn:
+            await conn.execute(
+                """UPDATE devices SET is_active = true, disabled_at = NULL, disabled_reason = NULL
+                WHERE user_id = $1 AND disabled_reason = 'insufficient_funds'""",
+                target_id,
+            )
+        logger.info(
+            "admin_give_balance: reactivated devices user_id=%s ok=%s fail=%s",
+            target_id, success_count, fail_count,
+        )
+        await message.answer(
+            f"🔌 Устройства пользователя <code>{target_id}</code> реактивированы: "
+            f"✅{success_count} ❌{fail_count}",
+            parse_mode="HTML",
+        )
 
     try:
         await bot.send_message(
