@@ -21,3 +21,9 @@ cachetools
 # zoneinfo is stdlib in 3.9+, no install needed
 # tzdata is needed on systems without system timezone data (e.g. slim Docker images)
 tzdata
+
+
+fastapi
+
+
+uvicorn[standard]

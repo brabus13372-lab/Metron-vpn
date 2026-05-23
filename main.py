@@ -7,6 +7,8 @@ if __name__ == "__main__":
     from app.services.billing import billing_engine
     import app.panel_client as panel_client
 
+    import uvicorn
+    from app.api import app as fastapi_app
     import urllib3
     from aiogram import Bot
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -24,7 +26,6 @@ if __name__ == "__main__":
     from app.config import ADMIN_ID, BOT_TOKEN, VLESS_SID
     from app.db import init_db, close_db
     from app.services.notifications import check_notifications
-
 
     def _log_task_exception(task: asyncio.Task) -> None:
         try:
@@ -58,14 +59,23 @@ if __name__ == "__main__":
         startup_check_task = asyncio.create_task(check_notifications(bot))
         startup_check_task.add_done_callback(_log_task_exception)
 
-        # ИСПРАВЛЕНО: передаём bot до старта, иначе уведомления молча не работают
         billing_engine.set_bot(bot)
         billing_engine.start()
+
+        api_server = uvicorn.Server(uvicorn.Config(
+            fastapi_app,
+            host="0.0.0.0",
+            port=8081,
+            log_level="warning"
+        ))
 
         logging.info("MetronVPN запущен и готов к работе.")
         try:
             await bot.delete_webhook(drop_pending_updates=True)
-            await dp.start_polling(bot)
+            await asyncio.gather(
+                dp.start_polling(bot),
+                api_server.serve(),
+            )
         finally:
             logging.info("Начинаем graceful shutdown...")
             billing_engine.stop()
