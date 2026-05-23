@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.schemas import (
     DeviceOut,
+    DeviceCreateIn,
     UserProfileOut,
     UserBillingOut,
     OkResponse,
@@ -23,6 +24,7 @@ from app.db import (
     remove_device,
     deactivate_device,
     update_user_link,
+    add_device,
 )
 from app.services.vpn import rotate_user_key
 
@@ -122,6 +124,23 @@ async def get_devices(user_id: int):
     await _get_user_or_404(user_id)
     devices_raw = await get_user_devices(user_id)
     return _build_devices(devices_raw)
+
+
+@app.post("/api/user/{user_id}/devices", response_model=DeviceOut, tags=["devices"])
+async def create_device(user_id: int, body: DeviceCreateIn):
+    """Создаёт новое устройство для пользователя."""
+    await _get_user_or_404(user_id)
+    device = await add_device(user_id, body.device_name)
+    if not device:
+        raise HTTPException(status_code=500, detail="Failed to create device")
+    return DeviceOut(
+        id=device["id"],
+        device_name=device["device_name"],
+        is_active=device["is_active"],
+        monthly_cost=float(device["monthly_cost"]),
+        daily_cost=round(float(device["monthly_cost"]) / 30, 2),
+        created_at=device.get("created_at"),
+    )
 
 
 @app.delete("/api/user/{user_id}/devices/{device_id}", response_model=OkResponse, tags=["devices"])

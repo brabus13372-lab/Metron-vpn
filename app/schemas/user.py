@@ -15,6 +15,10 @@ class DeviceOut(BaseModel):
     created_at: Optional[datetime] = None
 
 
+class DeviceCreateIn(BaseModel):
+    device_name: str
+
+
 class UserBillingOut(BaseModel):
     balance: float
     monthly_cost: float
