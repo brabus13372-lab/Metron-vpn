@@ -1,5 +1,6 @@
 from app.schemas.user import (
     DeviceOut,
+    DeviceCreateIn,
     UserBillingOut,
     UserProfileOut,
     OkResponse,
@@ -9,6 +10,7 @@ from app.schemas.user import (
 
 __all__ = [
     "DeviceOut",
+    "DeviceCreateIn",
     "UserBillingOut",
     "UserProfileOut",
     "OkResponse",
