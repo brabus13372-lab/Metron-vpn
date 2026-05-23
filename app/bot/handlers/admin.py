@@ -327,7 +327,7 @@ async def admin_check_panel(message: types.Message) -> None:
     """Проверка соединения с панелью."""
     wait_msg = await message.answer("🔍 Проверка соединения с панелью...")
     try:
-        from app.panel_client import get_panel_session
+        from app.core.panel_client import get_panel_session
         session = await get_panel_session()
     except Exception as e:
         logger.exception("admin_check_panel: exception")
