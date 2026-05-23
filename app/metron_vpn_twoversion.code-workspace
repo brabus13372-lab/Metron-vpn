@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"name": "metron_vpn_twoversion",
+			"path": ".."
+		},
+		{
+			"name": "webapp",
+			"path": "../../../../../var/www/metron_gui/webapp"
+		}
+	],
+	"settings": {}
+}
