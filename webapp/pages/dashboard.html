@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Metron — Dashboard</title>
+  <link rel="stylesheet" href="../assets/css/base.css">
+  <link rel="stylesheet" href="../assets/css/animations.css">
+  <link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body>
+
+<main class="page container anim-page">
+
+  <!-- Header -->
+  <header style="display:flex; align-items:center; justify-content:space-between; margin-bottom:var(--space-6);">
+    <div style="display:flex; align-items:center; gap:var(--space-3);">
+      <div class="avatar" id="avatar">M</div>
+      <div>
+        <div style="font-size:var(--text-base); font-weight:600;" id="username">Загрузка...</div>
+        <div style="font-size:var(--text-xs); color:var(--color-text-muted);">Metron VPN</div>
+      </div>
+    </div>
+    <div id="sub-badge"></div>
+  </header>
+
+  <!-- Subscription card -->
+  <div class="card card-accent anim-card" style="margin-bottom:var(--space-4);">
+    <div class="card-header">
+      <span class="card-title">Подписка</span>
+      <span style="font-size:var(--text-xs); color:var(--color-text-muted);" id="sub-plan">—</span>
+    </div>
+
+    <div style="display:flex; align-items:baseline; gap:var(--space-2); margin-bottom:var(--space-1);">
+      <span style="font-size:var(--text-2xl); font-weight:700; color:var(--color-text);" id="days-left">—</span>
+      <span style="font-size:var(--text-sm); color:var(--color-text-muted);">дней осталось</span>
+    </div>
+
+    <div style="font-size:var(--text-xs); color:var(--color-text-muted); margin-bottom:var(--space-4);">
+      до <span id="sub-end">—</span>
+    </div>
+
+    <div class="progress">
+      <div class="progress-fill" id="progress-fill" style="--progress-value: 0%; width:0%;"></div>
+    </div>
+  </div>
+
+  <!-- VLESS key -->
+  <div class="card anim-card" style="margin-bottom:var(--space-4);">
+    <div class="card-header">
+      <span class="card-title">VLESS · REALITY</span>
+      <span class="badge badge-success">
+        <span class="status-dot active"></span>
+        Активен
+      </span>
+    </div>
+
+    <div class="key-block" id="key-block">
+      <span class="key-text font-mono" id="vless-key">vless://загрузка...</span>
+      <button class="copy-btn btn-icon" id="copy-btn" aria-label="Скопировать ключ" onclick="copyKey()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- Actions -->
+  <div class="anim-card" style="display:flex; flex-direction:column; gap:var(--space-3); margin-bottom:var(--space-4);">
+    <button class="btn btn-primary btn-full btn-glow" onclick="rotateKey()">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/>
+      </svg>
+      Ротировать ключ
+    </button>
+
+    <button class="btn btn-ghost btn-full" onclick="openSupport()">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+      </svg>
+      Поддержка
+    </button>
+  </div>
+
+</main>
+
+<!-- Bottom nav -->
+<nav class="bottom-nav">
+  <a href="dashboard.html" class="nav-item active">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+      <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
+    </svg>
+    Главная
+  </a>
+  <a href="protocols.html" class="nav-item">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+    </svg>
+    Протоколы
+  </a>
+  <a href="profile.html" class="nav-item">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+    </svg>
+    Профиль
+  </a>
+</nav>
+
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="../assets/js/telegram.js"></script>
+<script src="../assets/js/api.js"></script>
+<script src="../assets/js/ui.js"></script>
+<script src="../assets/js/app.js"></script>
+
+</body>
+</html>

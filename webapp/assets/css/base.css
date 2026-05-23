@@ -1,0 +1,157 @@
+/* ============================================
+   METRON WEBAPP — BASE
+   Art direction: dark VPN dashboard
+   Palette: tokyonight — #1a1b27 surfaces, #7aa2f7 accent
+   Typography: Inter body
+   Density: balanced
+   ============================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300..700&family=Fira+Code:wght@400;500&display=swap');
+
+:root {
+  /* Surfaces */
+  --color-bg:              #0b0b0d;
+  --color-surface:         #141416;
+  --color-surface-2:       #1a1b1f;
+  --color-surface-offset:  #202127;
+  --color-border:          rgba(255, 255, 255, 0.08);
+  --color-divider:         rgba(255, 255, 255, 0.06);
+
+  /* Text */
+  --color-text:            #f2f3f5;
+  --color-text-muted:      #a7adb7;
+  --color-text-faint:      #6f7580;
+
+  /* Accent — silver */
+  --color-primary:         #c7ccd4;
+  --color-primary-hover:   #e1e5ea;
+  --color-primary-glow:    rgba(199, 204, 212, 0.14);
+
+  /* Status */
+  --color-success:         #b8c0cc;
+  --color-success-glow:    rgba(184, 192, 204, 0.12);
+  --color-warning:         #d4c29a;
+  --color-error:           #c58f8f;
+  --color-error-glow:      rgba(197, 143, 143, 0.12);
+
+  /* Type scale */
+  --text-xs:    0.75rem;   /* 12px */
+  --text-sm:    0.875rem;  /* 14px */
+  --text-base:  1rem;      /* 16px */
+  --text-lg:    1.125rem;  /* 18px */
+  --text-xl:    1.375rem;  /* 22px */
+  --text-2xl:   1.75rem;   /* 28px */
+
+  /* Spacing */
+  --space-1:  0.25rem;
+  --space-2:  0.5rem;
+  --space-3:  0.75rem;
+  --space-4:  1rem;
+  --space-5:  1.25rem;
+  --space-6:  1.5rem;
+  --space-8:  2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+
+  /* Radius */
+  --radius-sm:   0.5rem;
+  --radius-md:   0.875rem;
+  --radius-lg:   1.25rem;
+  --radius-xl:   1.75rem;
+  --radius-full: 9999px;
+
+  /* Transitions */
+  --transition: 180ms cubic-bezier(0.16, 1, 0.3, 1);
+  --transition-slow: 320ms cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* Fonts */
+  --font-body:    'Inter', system-ui, sans-serif;
+  --font-mono:    'Fira Code', 'Courier New', monospace;
+
+  /* Layout */
+  --nav-height:   64px;
+  --max-width:    480px;
+}
+
+/* ---- Reset ---- */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  color: var(--color-text);
+  background-color: var(--color-bg);
+  min-height: 100dvh;
+  line-height: 1.6;
+  overflow-x: hidden;
+}
+
+img, svg { display: block; max-width: 100%; }
+button { cursor: pointer; background: none; border: none; font: inherit; color: inherit; }
+a { color: inherit; text-decoration: none; }
+ul { list-style: none; }
+
+::selection {
+  background: var(--color-primary-glow);
+  color: var(--color-text);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+  border-radius: var(--radius-sm);
+}
+
+/* ---- Layout helpers ---- */
+.container {
+  max-width: var(--max-width);
+  margin-inline: auto;
+  padding-inline: var(--space-4);
+}
+
+.page {
+  padding-bottom: calc(var(--nav-height) + env(safe-area-inset-bottom, 0px) + var(--space-4));
+}
+
+/* ---- Typography helpers ---- */
+.text-muted  { color: var(--color-text-muted); }
+.text-faint  { color: var(--color-text-faint); }
+.text-accent { color: var(--color-primary); }
+.text-success { color: var(--color-success); }
+.text-error  { color: var(--color-error); }
+.font-mono   { font-family: var(--font-mono); }
+
+.bottom-nav {
+  height: calc(var(--nav-height) + env(safe-area-inset-bottom, 0px));
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Safe area для Telegram WebView */
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.page {
+  padding-top: calc(var(--space-4) + var(--safe-top));
+  padding-bottom: calc(var(--nav-height) + var(--safe-bottom) + var(--space-4));
+}
+
+.bottom-nav {
+  height: calc(var(--nav-height) + var(--safe-bottom));
+  padding-bottom: var(--safe-bottom);
+}

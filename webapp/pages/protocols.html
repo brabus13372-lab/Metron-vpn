@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Metron — Протоколы</title>
+  <link rel="stylesheet" href="../assets/css/base.css">
+  <link rel="stylesheet" href="../assets/css/animations.css">
+  <link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body>
+
+  <main class="container page">
+
+    <!-- Шапка -->
+    <div class="card-header" style="margin-bottom: var(--space-6);">
+      <h1 style="font-size: var(--text-xl); font-weight: 700;">Протоколы</h1>
+      <span class="badge badge-muted">VLESS</span>
+    </div>
+
+    <!-- Список протоколов -->
+    <div style="display: flex; flex-direction: column; gap: var(--space-3);">
+
+      <div class="protocol-card active">
+        <div class="protocol-icon">⚡</div>
+        <div style="flex:1;">
+          <div style="font-weight: 600; font-size: var(--text-sm);">VLESS + Reality</div>
+          <div class="text-muted" style="font-size: var(--text-xs);">Рекомендуется · Быстрый</div>
+        </div>
+        <span class="badge badge-success">Активен</span>
+      </div>
+
+      <div class="protocol-card">
+        <div class="protocol-icon">🔒</div>
+        <div style="flex:1;">
+          <div style="font-weight: 600; font-size: var(--text-sm);">VLESS + TLS</div>
+          <div class="text-muted" style="font-size: var(--text-xs);">Стабильный</div>
+        </div>
+        <span class="badge badge-muted">Доступен</span>
+      </div>
+
+      <div class="protocol-card disabled">
+        <div class="protocol-icon">🌐</div>
+        <div style="flex:1;">
+          <div style="font-weight: 600; font-size: var(--text-sm);">VMess</div>
+          <div class="text-muted" style="font-size: var(--text-xs);">Скоро</div>
+        </div>
+        <span class="badge badge-warning">Скоро</span>
+      </div>
+
+    </div>
+
+    <!-- Ключ -->
+    <div style="margin-top: var(--space-6);">
+      <div class="card-title" style="margin-bottom: var(--space-3);">Ваш ключ</div>
+      <div class="key-block">
+        <span class="key-text">vless://xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx@...</span>
+        <button class="copy-btn" onclick="copyKey(this)" aria-label="Скопировать ключ">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        </button>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Нижняя навигация -->
+  <nav class="bottom-nav">
+    <a href="dashboard.html" class="nav-item">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+      <span>Главная</span>
+    </a>
+    <a href="protocols.html" class="nav-item active">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      <span>Протоколы</span>
+    </a>
+    <a href="profile.html" class="nav-item">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      <span>Профиль</span>
+    </a>
+  </nav>
+
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script>
+    const tg = window.Telegram?.WebApp;
+    if (tg) { tg.expand(); tg.ready(); }
+
+    function copyKey(btn) {
+      navigator.clipboard.writeText('vless://xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx@...')
+        .then(() => {
+          btn.classList.add('copied');
+          setTimeout(() => btn.classList.remove('copied'), 2000);
+        });
+    }
+  </script>
+
+</body>
+</html>

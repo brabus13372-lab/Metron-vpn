@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Metron — Профиль</title>
+  <link rel="stylesheet" href="../assets/css/base.css">
+  <link rel="stylesheet" href="../assets/css/animations.css">
+  <link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body>
+
+  <main class="container page">
+
+    <!-- Шапка -->
+    <div class="card-header" style="margin-bottom: var(--space-6);">
+      <h1 style="font-size: var(--text-xl); font-weight: 700;">Профиль</h1>
+    </div>
+
+    <!-- Аватар + имя -->
+    <div class="card card-accent" style="display:flex; align-items:center; gap: var(--space-4); margin-bottom: var(--space-4);">
+      <div class="avatar" id="user-avatar" style="width:56px; height:56px; font-size: var(--text-xl);">?</div>
+      <div>
+        <div class="user-name" id="user-name" style="font-weight: 600; font-size: var(--text-base);">—</div>
+        <div class="user-username text-muted" id="user-username" style="font-size: var(--text-sm);">—</div>
+      </div>
+      <span class="badge badge-success" id="status-badge" style="margin-left:auto;">Активен</span>
+    </div>
+
+    <!-- Инфо о подписке -->
+    <div class="card" style="margin-bottom: var(--space-4);">
+      <div class="card-title" style="margin-bottom: var(--space-4);">Подписка</div>
+
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: var(--space-3);">
+        <span class="text-muted" style="font-size: var(--text-sm);">Тариф</span>
+        <span id="plan" style="font-weight: 600; font-size: var(--text-sm);">—</span>
+      </div>
+      <div class="divider"></div>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: var(--space-3);">
+        <span class="text-muted" style="font-size: var(--text-sm);">Истекает</span>
+        <span id="sub-end" style="font-weight: 600; font-size: var(--text-sm);">—</span>
+      </div>
+      <div class="divider"></div>
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <span class="text-muted" style="font-size: var(--text-sm);">Осталось дней</span>
+        <span id="days-left" style="font-weight: 600; font-size: var(--text-sm);">—</span>
+      </div>
+    </div>
+
+    <!-- Telegram аккаунт -->
+    <div class="card" style="margin-bottom: var(--space-4);">
+      <div class="card-title" style="margin-bottom: var(--space-4);">Аккаунт</div>
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <span class="text-muted" style="font-size: var(--text-sm);">Telegram ID</span>
+        <span class="user-id font-mono" id="user-tg-id" style="font-weight: 600; font-size: var(--text-sm);">—</span>
+      </div>
+    </div>
+
+    <!-- Кнопка -->
+    <button class="btn btn-primary btn-full">Продлить подписку</button>
+
+  </main>
+
+  <!-- Нижняя навигация -->
+  <nav class="bottom-nav">
+    <a href="dashboard.html" class="nav-item">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+      <span>Главная</span>
+    </a>
+    <a href="protocols.html" class="nav-item">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      <span>Протоколы</span>
+    </a>
+    <a href="profile.html" class="nav-item active">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      <span>Профиль</span>
+    </a>
+  </nav>
+
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script type="module">
+    import { fetchUserData } from '../assets/js/api.js';
+
+    const tg = window.Telegram?.WebApp;
+    if (tg) { tg.expand(); tg.ready(); }
+
+    const user = tg?.initDataUnsafe?.user;
+    const userId = user?.id ?? 5937555925;
+
+    // TG данные сразу если есть
+    if (user) {
+      const fullName = [user.first_name, user.last_name].filter(Boolean).join(' ');
+      document.getElementById('user-avatar').textContent = (user.first_name?.[0] || 'U').toUpperCase();
+      document.getElementById('user-name').textContent = fullName || 'Пользователь';
+      document.getElementById('user-username').textContent = user.username ? '@' + user.username : 'без username';
+    }
+
+    // Всегда показываем TG ID (даже в браузере — берём из userId)
+    document.getElementById('user-tg-id').textContent = userId;
+
+    // API данные
+    try {
+      const data = await fetchUserData(userId);
+
+      // Аватар и имя из API если TG недоступен
+      if (!user) {
+        const name = data.name ?? 'Пользователь';
+        document.getElementById('user-avatar').textContent = name[0].toUpperCase();
+        document.getElementById('user-name').textContent = name;
+        document.getElementById('user-username').textContent = '@' + name;
+      }
+
+      // Подписка
+      document.getElementById('plan').textContent = data.plan ?? '—';
+      document.getElementById('sub-end').textContent = data.subscription_end ?? '—';
+      document.getElementById('days-left').textContent = data.days_left ?? '—';
+
+      // Статус бейдж
+      const badge = document.getElementById('status-badge');
+      if (data.days_left > 0) {
+        badge.textContent = 'Активен';
+        badge.className = 'badge badge-success';
+      } else {
+        badge.textContent = 'Истекла';
+        badge.className = 'badge badge-error';
+      }
+
+    } catch (err) {
+      console.error('Profile load error:', err);
+    }
+  </script>
+
+</body>
+</html>
