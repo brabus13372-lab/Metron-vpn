@@ -5,7 +5,7 @@ if __name__ == "__main__":
     import sys
 
     from app.services.billing import billing_engine
-    import app.panel_client as panel_client
+    import app.core.panel_client as panel_client
 
     import uvicorn
     from app.api import app as fastapi_app
@@ -19,7 +19,7 @@ if __name__ == "__main__":
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
 
-    from app.logging_sanitizer import ensure_sanitized_logging
+    from app.core.logging_sanitizer import ensure_sanitized_logging
     ensure_sanitized_logging()
 
     from app.bot.dispatcher import dp
