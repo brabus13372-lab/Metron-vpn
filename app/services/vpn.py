@@ -448,3 +448,29 @@ async def rotate_client_uuid(
     return True, new_uuid, (
         f"New key created; delete reported error but old client not found on recheck: {delete_msg}"
     )
+
+
+async def rotate_user_key(
+    user_id: int,
+    username: str,
+    old_uuid: str | None,
+):
+    """
+    High-level wrapper for API: rotates the user's main VLESS key.
+    Returns (new_vless_link, new_uuid, error_message).
+    """
+    if not old_uuid:
+        # Нет ключа — создаём новый с нуля
+        return await create_panel_client(user_id, username)
+
+    success, new_uuid, msg = await rotate_client_uuid(
+        old_uuid=old_uuid,
+        user_id=user_id,
+        username=username,
+    )
+
+    if not success or not new_uuid:
+        return None, None, msg
+
+    new_link = build_vless_link(new_uuid, username)
+    return new_link, new_uuid, None
