@@ -7,8 +7,8 @@ import uuid
 from datetime import datetime, timedelta
 
 from app.config import INBOUND_ID
-from app.vless import build_vless_link
-from app.panel_client import (
+from app.core.vless import build_vless_link
+from app.core.panel_client import (
     panel_request,
     update_client_fields,
     get_inbound,
@@ -332,7 +332,7 @@ async def deactivate_all_user_devices(user_id: int):
                     user_id, dev_name, client_uuid, err_msg,
                 )
                 fail_count += 1
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "panel.deactivate_device.exception user_id=%s device=%s uuid=%s",
                 user_id, dev_name, client_uuid,
@@ -347,130 +347,80 @@ async def deactivate_all_user_devices(user_id: int):
 
 
 # ---------------------------------------------------------------------------
-# Key rotation
+# Rotate UUID helpers
 # ---------------------------------------------------------------------------
 
 async def rotate_client_uuid(
     old_uuid: str,
     user_id: int,
     username: str,
-    target_ts_ms: int | None = None,
-):
+) -> tuple[str | None, str | None, str | None]:
     """
-    Creates a new panel client cloned from the old one, then removes the old one.
-    Returns (success, new_uuid, message).
+    Low-level: rotates a single client UUID in the panel.
+    Fetches current client settings, replaces UUID, updates in place.
+    Returns (new_uuid, vless_link, error_message).
     """
-    logger.info("panel.rotate_client.start user_id=%s old_uuid=%s", user_id, old_uuid)
-
     inbound = await get_inbound(INBOUND_ID)
     if not inbound:
-        msg = "Inbound not found"
-        logger.error(
-            "panel.rotate_client.inbound_not_found user_id=%s old_uuid=%s",
-            user_id, old_uuid,
-        )
-        return False, None, msg
+        return None, None, "Failed to fetch inbound"
 
     settings = parse_inbound_settings(inbound)
-    old_client = find_client_in_settings(settings, old_uuid)
-    if not old_client:
-        msg = "Old client not found in inbound"
-        logger.error(
-            "panel.rotate_client.client_not_found user_id=%s old_uuid=%s",
+    client = find_client_in_settings(settings, old_uuid)
+
+    if not client:
+        logger.warning(
+            "rotate_client_uuid.not_found user_id=%s old_uuid=%s",
             user_id, old_uuid,
         )
-        return False, None, msg
+        return None, None, f"Client {old_uuid} not found in panel"
 
     new_uuid = str(uuid.uuid4())
-    new_sub_id = _generate_sub_id()
-    email = _build_main_client_email(user_id, new_uuid)
 
-    cloned = dict(old_client)
-    cloned.update({
-        "id": new_uuid,
-        "email": email,
-        "subId": new_sub_id,
-        "expiryTime": (
-            target_ts_ms if target_ts_ms is not None
-            else old_client.get("expiryTime", 0)
-        ),
-        "enable": True,
-        "comment": "Rotated Key",
-    })
-
-    res = await panel_request(
-        "POST",
-        "/panel/api/inbounds/addClient",
-        data=_build_form_data({"clients": [cloned]}),
-        timeout=10,
+    ok, msg = await update_client_fields(
+        old_uuid,
+        {"id": new_uuid},
+        inbound_id=INBOUND_ID,
     )
 
-    if not res.get("success"):
-        msg = res.get("msg") or "Panel addClient failed"
-        logger.error(
-            "panel.rotate_client.fail_create user_id=%s old_uuid=%s msg=%s",
-            user_id, old_uuid, msg,
-        )
-        return False, None, msg
+    if not ok:
+        return None, None, f"Panel update failed: {msg}"
 
-    delete_res = await panel_request(
-        "POST",
-        f"/panel/api/inbounds/{INBOUND_ID}/delClient/{old_uuid}",
-        timeout=10,
+    link = build_vless_link(new_uuid, username)
+    logger.info(
+        "rotate_client_uuid.success user_id=%s old=%s new=%s",
+        user_id, old_uuid, new_uuid,
     )
+    return new_uuid, link, None
 
-    if delete_res.get("success") or "not found" in str(delete_res.get("msg", "")).lower():
-        logger.info(
-            "panel.rotate_client.success user_id=%s old_uuid=%s new_uuid=%s",
-            user_id, old_uuid, new_uuid,
-        )
-        return True, new_uuid, "OK"
 
-    # Partial success: new client created but old one may not have been deleted
-    delete_msg = delete_res.get("msg") or "Unknown delete error"
-    logger.warning(
-        "panel.rotate_client.partial_success user_id=%s old_uuid=%s new_uuid=%s delete_msg=%s",
-        user_id, old_uuid, new_uuid, delete_msg,
-    )
-
-    # Recheck whether old client is actually gone
-    verify_inbound = await get_inbound(INBOUND_ID)
-    if verify_inbound:
-        verify_settings = parse_inbound_settings(verify_inbound)
-        still_exists = find_client_in_settings(verify_settings, old_uuid) is not None
-        if still_exists:
-            logger.warning(
-                "panel.rotate_client.old_still_exists user_id=%s old_uuid=%s new_uuid=%s",
-                user_id, old_uuid, new_uuid,
-            )
-            return True, new_uuid, f"New key created, but old client still exists: {delete_msg}"
-
-    return True, new_uuid, (
-        f"New key created; delete reported error but old client not found on recheck: {delete_msg}"
-    )
-
+# ---------------------------------------------------------------------------
+# High-level rotate (used by API)
+# ---------------------------------------------------------------------------
 
 async def rotate_user_key(
     user_id: int,
     username: str,
     old_uuid: str | None,
-):
+) -> tuple[str | None, str | None, str | None]:
     """
-    High-level wrapper for API: rotates the user's main VLESS key.
-    Returns (new_vless_link, new_uuid, error_message).
+    Rotates the main VLESS key for a user.
+    If old_uuid is missing, creates a brand-new client in the panel.
+    Returns (vless_link, new_uuid, error_message).
     """
     if not old_uuid:
-        # Нет ключа — создаём новый с нуля
-        return await create_panel_client(user_id, username)
+        logger.info(
+            "rotate_user_key.no_old_uuid user_id=%s — creating new client",
+            user_id,
+        )
+        vless_link, new_uuid, err = await create_panel_client(user_id, username)
+        return vless_link, new_uuid, err
 
-    success, new_uuid, msg = await rotate_client_uuid(
-        old_uuid=old_uuid,
-        user_id=user_id,
-        username=username,
-    )
+    new_uuid, vless_link, err = await rotate_client_uuid(old_uuid, user_id, username)
+    if err:
+        logger.warning(
+            "rotate_user_key.rotate_failed user_id=%s err=%s — falling back to create",
+            user_id, err,
+        )
+        vless_link, new_uuid, err = await create_panel_client(user_id, username)
 
-    if not success or not new_uuid:
-        return None, None, msg
-
-    new_link = build_vless_link(new_uuid, username)
-    return new_link, new_uuid, None
+    return vless_link, new_uuid, err
