@@ -46,7 +46,6 @@
     .rec-tag {
       display: inline-flex;
       align-items: center;
-      gap: var(--space-1);
       font-size: 10px;
       font-weight: 700;
       letter-spacing: 0.08em;
@@ -61,14 +60,13 @@
     .soon-tag {
       display: inline-flex;
       align-items: center;
-      gap: var(--space-1);
       font-size: 10px;
       font-weight: 700;
       letter-spacing: 0.06em;
       text-transform: uppercase;
       color: var(--color-warning);
-      background: rgba(224,175,104,0.10);
-      border: 1px solid rgba(224,175,104,0.22);
+      background: color-mix(in oklch, var(--color-warning) 10%, transparent);
+      border: 1px solid color-mix(in oklch, var(--color-warning) 25%, transparent);
       border-radius: var(--radius-full);
       padding: 2px 8px;
     }
@@ -82,35 +80,6 @@
     .info-row + .info-row { border-top: 1px solid var(--color-divider); }
     .info-label { font-size: var(--text-sm); color: var(--color-text-muted); }
     .info-value { font-size: var(--text-sm); font-weight: 600; }
-
-    /* Hysteria2 — особая карточка */
-    .hysteria-card {
-      background: var(--color-surface);
-      border: 1px solid var(--color-border);
-      border-radius: var(--radius-lg);
-      padding: var(--space-4);
-      display: flex;
-      align-items: center;
-      gap: var(--space-4);
-      opacity: 0.5;
-      cursor: default;
-      pointer-events: none;
-      position: relative;
-      overflow: hidden;
-    }
-    .hysteria-card::after {
-      content: 'SOON';
-      position: absolute;
-      top: 10px;
-      right: -18px;
-      background: var(--color-warning);
-      color: #0b0b0d;
-      font-size: 9px;
-      font-weight: 800;
-      letter-spacing: 0.1em;
-      padding: 2px 24px;
-      transform: rotate(35deg);
-    }
   </style>
 </head>
 <body>
@@ -128,7 +97,7 @@
     <!-- Протоколы -->
     <div style="display: flex; flex-direction: column; gap: var(--space-3); margin-bottom: var(--space-5);">
 
-      <!-- VLESS + Reality — единственный активный -->
+      <!-- VLESS + Reality — активный -->
       <div class="protocol-card active">
         <div class="protocol-icon">⚡</div>
         <div style="flex:1; min-width:0;">
@@ -142,12 +111,12 @@
         </div>
         <div style="display:flex; flex-direction:column; align-items:flex-end; gap:var(--space-1); flex-shrink:0;">
           <span class="badge badge-success">Активен</span>
-          <span class="protocol-price">~3.33 ₽/день</span>
+          <span class="protocol-price">3.33 ₽ / день</span>
         </div>
       </div>
 
       <!-- Hysteria 2 — скоро -->
-      <div class="hysteria-card">
+      <div class="protocol-card coming-soon">
         <div class="protocol-icon">🚀</div>
         <div style="flex:1; min-width:0;">
           <div style="display:flex; align-items:center; gap:var(--space-2); margin-bottom:var(--space-1); flex-wrap:wrap;">
@@ -155,26 +124,26 @@
             <span class="soon-tag">⏳ Скоро</span>
           </div>
           <div style="font-size: var(--text-xs); color: var(--color-text-muted);">
-            UDP · Высокая скорость на плохих сетях
+            UDP · Высокая скорость на нестабильных сетях
           </div>
         </div>
         <div style="display:flex; flex-direction:column; align-items:flex-end; gap:var(--space-1); flex-shrink:0;">
-          <span class="protocol-price-muted">— ₽/день</span>
+          <span class="protocol-price-muted">— ₽ / день</span>
         </div>
       </div>
 
     </div>
 
-    <!-- Детали VLESS + Reality -->
+    <!-- Детали -->
     <div class="card" style="margin-bottom: var(--space-4);">
-      <div class="card-title" style="margin-bottom: var(--space-1);">Детали протокола</div>
+      <div class="card-title" style="margin-bottom: var(--space-1);">VLESS + Reality</div>
       <div class="info-row">
         <span class="info-label">Стоимость</span>
-        <span class="info-value">~3.33 ₽ / день · устройство</span>
+        <span class="info-value">3.33 ₽ в день за устройство</span>
       </div>
       <div class="info-row">
         <span class="info-label">В месяц</span>
-        <span class="info-value">~100 ₽ / устройство</span>
+        <span class="info-value">~100 ₽ за устройство</span>
       </div>
       <div class="info-row">
         <span class="info-label">Шифрование</span>
@@ -186,14 +155,14 @@
       </div>
       <div class="info-row">
         <span class="info-label">Клиенты</span>
-        <span class="info-value">Hiddify · V2RayNG · Sing-Box</span>
+        <span class="info-value">V2RayTun · Hiddify</span>
       </div>
     </div>
 
     <!-- Ключ -->
     <div class="card">
       <div class="card-title" style="margin-bottom: var(--space-3);">Ваш ключ</div>
-      <div class="key-block" id="key-block">
+      <div class="key-block">
         <span class="key-text" id="vless-key">Загрузка...</span>
         <button class="copy-btn" id="btn-copy" onclick="copyKey()" aria-label="Скопировать ключ">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -203,7 +172,7 @@
         </button>
       </div>
       <p style="font-size:var(--text-xs); color:var(--color-text-faint); margin-top:var(--space-2);">
-        Вставьте ключ в Hiddify или V2RayNG для подключения
+        Вставьте ключ в V2RayTun или Hiddify для подключения
       </p>
     </div>
 
