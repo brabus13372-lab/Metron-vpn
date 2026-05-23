@@ -8,7 +8,6 @@
   <link rel="stylesheet" href="../assets/css/animations.css">
   <link rel="stylesheet" href="../assets/css/components.css">
   <style>
-    /* ---- Skeleton loader ---- */
     @keyframes shimmer {
       0%   { background-position: -200% 0; }
       100% { background-position:  200% 0; }
@@ -29,7 +28,6 @@
     }
     .skeleton * { visibility: hidden; }
 
-    /* ---- Status row ---- */
     .stat-row {
       display: flex;
       justify-content: space-between;
@@ -40,7 +38,6 @@
     .stat-label { font-size: var(--text-sm); color: var(--color-text-muted); }
     .stat-value { font-size: var(--text-sm); font-weight: 600; }
 
-    /* ---- Device item ---- */
     .device-item {
       display: flex;
       align-items: center;
@@ -57,12 +54,11 @@
       border-radius: var(--radius-full);
       flex-shrink: 0;
     }
-    .device-dot.active  { background: var(--color-success); box-shadow: 0 0 6px var(--color-success-glow); }
+    .device-dot.active   { background: var(--color-success); box-shadow: 0 0 6px var(--color-success-glow); }
     .device-dot.inactive { background: var(--color-text-faint); }
     .device-name { flex: 1; font-size: var(--text-sm); font-weight: 500; }
     .device-cost { font-size: var(--text-xs); color: var(--color-text-faint); }
 
-    /* ---- Delete modal ---- */
     .modal-overlay {
       position: fixed; inset: 0;
       background: rgba(0,0,0,0.6);
@@ -94,7 +90,6 @@
     .modal-desc  { font-size: var(--text-sm); color: var(--color-text-muted); margin-bottom: var(--space-6); }
     .modal-actions { display: flex; flex-direction: column; gap: var(--space-3); }
 
-    /* ---- Add device form ---- */
     .input-field {
       width: 100%;
       background: var(--color-bg);
@@ -109,7 +104,6 @@
     .input-field::placeholder { color: var(--color-text-faint); }
     .input-field:focus { outline: none; border-color: var(--color-primary); }
 
-    /* ---- Spinner ---- */
     @keyframes spin { to { transform: rotate(360deg); } }
     .spinner {
       width: 16px; height: 16px;
@@ -120,7 +114,6 @@
       flex-shrink: 0;
     }
 
-    /* ---- Balance highlight ---- */
     .balance-amount {
       font-size: var(--text-2xl);
       font-weight: 700;
@@ -131,6 +124,58 @@
       font-size: var(--text-xs);
       color: var(--color-text-faint);
       margin-top: var(--space-1);
+    }
+
+    /* ---- Серебристая кнопка инструкции ---- */
+    .btn-instruction {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: var(--space-3);
+      padding: var(--space-3) var(--space-5);
+      border-radius: var(--radius-lg);
+      font-size: var(--text-sm);
+      font-weight: 600;
+      font-family: var(--font-body);
+      cursor: pointer;
+      border: 1px solid rgba(180,180,200,0.35);
+      background: linear-gradient(
+        135deg,
+        rgba(220,222,230,0.18) 0%,
+        rgba(180,183,198,0.10) 40%,
+        rgba(210,214,228,0.20) 70%,
+        rgba(240,240,248,0.12) 100%
+      );
+      background-size: 200% 200%;
+      color: var(--color-text-muted);
+      position: relative;
+      overflow: hidden;
+      transition: all 180ms cubic-bezier(0.16,1,0.3,1);
+      -webkit-tap-highlight-color: transparent;
+    }
+    .btn-instruction::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(
+        105deg,
+        transparent 20%,
+        rgba(255,255,255,0.18) 50%,
+        transparent 80%
+      );
+      background-size: 200% 100%;
+      background-position: -100% 0;
+      transition: background-position 0.5s ease;
+      pointer-events: none;
+    }
+    .btn-instruction:hover::before,
+    .btn-instruction:focus-visible::before {
+      background-position: 150% 0;
+    }
+    .btn-instruction:active {
+      opacity: 0.75;
+      transform: scale(0.98);
     }
   </style>
 </head>
@@ -206,6 +251,16 @@
       </div>
     </div>
 
+    <!-- Инструкция — перенесена выше устройств -->
+    <button class="btn-instruction" style="margin-bottom:var(--space-4);" onclick="openInstruction()">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+        <circle cx="12" cy="12" r="10"/>
+        <line x1="12" y1="16" x2="12" y2="12"/>
+        <line x1="12" y1="8" x2="12.01" y2="8"/>
+      </svg>
+      Инструкция по подключению
+    </button>
+
     <!-- Устройства -->
     <div class="card" style="margin-bottom:var(--space-4);">
       <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:var(--space-1);">
@@ -217,22 +272,12 @@
           Добавить
         </button>
       </div>
-
       <div id="devices-list">
-        <!-- заполняется через JS -->
         <div class="stat-row" style="border-top:none;">
           <span class="stat-label" style="font-style:italic;">Загрузка...</span>
         </div>
       </div>
     </div>
-
-    <!-- Инструкция -->
-    <button class="btn btn-ghost btn-full" style="gap:var(--space-3); margin-bottom:var(--space-3);" onclick="openInstruction()">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
-      </svg>
-      Инструкция по подключению
-    </button>
 
   </main>
 
@@ -265,7 +310,7 @@
       <div class="modal-desc" id="modal-delete-desc">Устройство будет отключено. Действие необратимо.</div>
       <div class="modal-actions">
         <button class="btn btn-danger btn-full" id="btn-confirm-delete">Удалить</button>
-        <button class="btn btn-ghost btn-full" onclick="closeModal('modal-delete')">Отмена</button>
+        <button class="btn btn-ghost btn-full" onclick="closeModal('modal-delete')"Отмена</button>
       </div>
     </div>
   </div>
@@ -283,7 +328,6 @@
     </div>
   </div>
 
-  <!-- Toast -->
   <div class="toast" id="toast" style="display:none;"></div>
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
@@ -296,12 +340,10 @@
     const tgUser = tg?.initDataUnsafe?.user;
     const USER_ID = tgUser?.id ?? null;
 
-    // ---- Состояние ----
     let _vlessKey = '';
     let _devices  = [];
     let _deleteId = null;
 
-    // ---- Заполняем TG данные сразу ----
     if (tgUser) {
       const fullName = [tgUser.first_name, tgUser.last_name].filter(Boolean).join(' ');
       document.getElementById('user-avatar').textContent   = (tgUser.first_name?.[0] || 'U').toUpperCase();
@@ -310,12 +352,8 @@
     }
     if (USER_ID) document.getElementById('user-tg-id').textContent = USER_ID;
 
-    // ---- Загрузка профиля ----
     async function loadProfile() {
-      if (!USER_ID) {
-        showError('Откройте приложение через Telegram');
-        return;
-      }
+      if (!USER_ID) { showError('Откройте приложение через Telegram'); return; }
       try {
         const data = await fetchUserData(USER_ID);
         renderProfile(data);
@@ -326,17 +364,14 @@
     }
 
     function renderProfile(data) {
-      // Баланс
       const bal = parseFloat(data.balance ?? 0).toFixed(2);
       document.getElementById('balance-amount').textContent = `${bal} ₽`;
 
-      // Расход
       const cost = data.monthly_cost ?? null;
       document.getElementById('balance-sub').textContent = cost
         ? `Расход: ${parseFloat(cost).toFixed(2)} ₽/мес`
         : 'Нет активных устройств';
 
-      // Статус
       const statusMap = {
         ACTIVE:   { label: '✅ Активна',   cls: 'badge-success' },
         TRIAL:    { label: '🕓 Trial',      cls: 'badge-warning' },
@@ -349,14 +384,9 @@
       badge.className   = `badge ${st.cls}`;
 
       document.getElementById('sub-status').textContent = st.label;
-      document.getElementById('sub-days').textContent   = data.days_left != null
-        ? `${data.days_left} дн.`
-        : '—';
-      document.getElementById('sub-cost').textContent   = cost
-        ? `${parseFloat(cost).toFixed(2)} ₽/мес`
-        : '—';
+      document.getElementById('sub-days').textContent   = data.days_left != null ? `${data.days_left} дн.` : '—';
+      document.getElementById('sub-cost').textContent   = cost ? `${parseFloat(cost).toFixed(2)} ₽/мес` : '—';
 
-      // Ключ
       _vlessKey = data.vless_key ?? '';
       const keyEl = document.getElementById('vless-key');
       if (_vlessKey) {
@@ -366,7 +396,6 @@
         document.getElementById('btn-copy-key').disabled = true;
       }
 
-      // Устройства
       _devices = data.devices ?? [];
       renderDevices(_devices);
     }
@@ -374,12 +403,7 @@
     function renderDevices(devices) {
       const list = document.getElementById('devices-list');
       if (!devices.length) {
-        list.innerHTML = `
-          <div style="padding:var(--space-4) 0; text-align:center;">
-            <div style="font-size:var(--text-sm); color:var(--color-text-faint); font-style:italic;">
-              Нет устройств
-            </div>
-          </div>`;
+        list.innerHTML = `<div style="padding:var(--space-4) 0; text-align:center;"><div style="font-size:var(--text-sm); color:var(--color-text-faint); font-style:italic;">Нет устройств</div></div>`;
         return;
       }
       list.innerHTML = devices.map(dev => `
@@ -387,19 +411,15 @@
           <div class="device-dot ${dev.is_active ? 'active' : 'inactive'}"></div>
           <span class="device-name">${escHtml(dev.device_name)}</span>
           <span class="device-cost">${parseFloat(dev.monthly_cost ?? 0).toFixed(2)} ₽/мес</span>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--color-text-faint); flex-shrink:0;">
-            <polyline points="9 18 15 12 9 6"/>
-          </svg>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--color-text-faint); flex-shrink:0;"><polyline points="9 18 15 12 9 6"/></svg>
         </div>`).join('');
     }
 
-    // ---- Ротация ключа ----
     window.rotateKey = async function() {
       if (!USER_ID) return;
       const btn = document.getElementById('btn-rotate');
       btn.disabled = true;
       btn.innerHTML = `<div class="spinner"></div> Обновляем...`;
-
       try {
         const res = await apiRotateKey(USER_ID);
         _vlessKey = res.vless_link ?? res.key ?? '';
@@ -413,7 +433,6 @@
       }
     };
 
-    // ---- Копировать ключ ----
     window.copyKey = function() {
       if (!_vlessKey) return;
       navigator.clipboard.writeText(_vlessKey).then(() => {
@@ -424,24 +443,18 @@
       });
     };
 
-    // ---- Пополнить баланс ----
-    window.openTopup = function() {
-      // Редиректим в бот — там платёжка
-      if (tg) tg.close();
-    };
+    window.openTopup = function() { if (tg) tg.close(); };
 
-    // ---- Инструкция ----
     window.openInstruction = function() {
       if (tg) {
         tg.showPopup({
           title: 'Подключение VPN',
-          message: '1. Установите Hiddify или V2RayNG\n2. Скопируйте ключ\n3. Вставьте в приложение\n4. Подключитесь',
+          message: '1. Установите V2RayTun или Hiddify\n2. Скопируйте ключ выше\n3. Вставьте в приложение\n4. Подключитесь',
           buttons: [{ type: 'ok', text: 'Понятно' }]
         });
       }
     };
 
-    // ---- Модалки ----
     window.openDeleteDevice = function(id, name) {
       _deleteId = id;
       document.getElementById('modal-delete-title').textContent = `Удалить «${name}»?`;
@@ -456,14 +469,10 @@
 
     window.confirmAddDevice = async function() {
       const name = document.getElementById('input-device-name').value.trim();
-      if (!name || name.length > 50) {
-        showToast('❌ Введите название (1–50 символов)');
-        return;
-      }
+      if (!name || name.length > 50) { showToast('❌ Введите название (1–50 символов)'); return; }
       const btn = document.getElementById('btn-confirm-add');
       btn.disabled = true;
       btn.innerHTML = `<div class="spinner"></div> Добавляем...`;
-
       try {
         const res = await fetch(`/api/user/${USER_ID}/devices`, {
           method: 'POST',
@@ -486,7 +495,6 @@
       const btn = document.getElementById('btn-confirm-delete');
       btn.disabled = true;
       btn.innerHTML = `<div class="spinner"></div> Удаляем...`;
-
       try {
         const res = await fetch(`/api/user/${USER_ID}/devices/${id}`, { method: 'DELETE' });
         if (!res.ok) throw new Error(res.status);
@@ -505,40 +513,29 @@
       document.getElementById(id).classList.add('open');
       document.body.style.overflow = 'hidden';
     }
-
     window.closeModal = function(id) {
       document.getElementById(id).classList.remove('open');
       document.body.style.overflow = '';
     };
-
-    // Закрытие модалки по тапу на оверлей
     document.querySelectorAll('.modal-overlay').forEach(el => {
-      el.addEventListener('click', e => {
-        if (e.target === el) closeModal(el.id);
-      });
+      el.addEventListener('click', e => { if (e.target === el) closeModal(el.id); });
     });
 
-    // ---- Утилиты ----
     function showToast(msg) {
       const t = document.getElementById('toast');
       t.textContent = msg;
       t.style.display = 'block';
       t.style.animation = 'none';
-      t.offsetHeight; // reflow
+      t.offsetHeight;
       t.style.animation = '';
       clearTimeout(t._timer);
       t._timer = setTimeout(() => { t.style.display = 'none'; }, 2500);
     }
-
-    function showError(msg) {
-      showToast('⚠️ ' + msg);
-    }
-
+    function showError(msg) { showToast('⚠️ ' + msg); }
     function escHtml(s) {
       return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
 
-    // ---- Старт ----
     loadProfile();
   </script>
 
