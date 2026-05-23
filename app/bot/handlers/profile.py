@@ -11,13 +11,21 @@ from aiogram.fsm.state import State, StatesGroup
 
 from app.bot.dispatcher import dp
 from app.config import ADMIN_ID, DEVICE_MONTHLY_COST, TZ_MSK, TZ_NSK
+
 from app.db import (
-    get_user,
+    get_user_data_dict as get_user,
     get_user_devices,
     add_device,
-    delete_device,
-    get_device_by_id,
+    remove_device as delete_device,
 )
+
+async def get_device_by_id(device_id: int):
+    from app.db import get_user_devices
+    # временная заглушка — ищем устройство по id среди всех
+    from app.db import get_db
+    db = get_db()
+    return await db.fetch_one("SELECT * FROM devices WHERE id = :id", {"id": device_id})
+
 from app.services.vpn import (
     add_device_to_panel,
     remove_device_from_panel,
