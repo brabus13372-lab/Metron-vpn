@@ -7,10 +7,13 @@ from typing import Union
 from aiogram import F, types
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.types import WebAppInfo, InlineKeyboardButton, InlineKeyboardMarkup
+from app.config import SERVER_IP
+from app.config import WEBAPP_URL
+from app.config import ADMIN_ID, TRIAL_DAYS
 
 from app.bot.dispatcher import dp
 from app.bot.keyboards import main_kb
-from app.config import ADMIN_ID, TRIAL_DAYS
 from app.db import (
     get_user_data_dict,
     get_user_balance,
@@ -119,6 +122,13 @@ async def start_cmd(message: types.Message) -> None:
         "📢 Новости и обновления: <a href='https://t.me/metronVPN'>t.me/metronVPN</a>"
     )
     await message.answer(text, reply_markup=main_kb(), parse_mode="HTML", disable_web_page_preview=True)
+    webapp_kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="🌐 Личный кабинет",
+            web_app=WebAppInfo(url=WEBAPP_URL)
+        )
+    ]])
+    await message.answer("Открой свой личный кабинет 👇", reply_markup=webapp_kb)
 
 
 @dp.message(F.text == "🚀 Подключить VPN")

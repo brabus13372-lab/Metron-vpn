@@ -16,6 +16,7 @@ INBOUND_ID = int(os.getenv("INBOUND_ID", 1))
 PAY_TOKEN = os.getenv("PAY_TOKEN")
 DEVICE_MONTHLY_COST = Decimal(os.getenv("DEVICE_MONTHLY_COST", "100.00"))
 BOT_NAME = os.getenv("BOT_NAME")
+WEBAPP_URL = os.getenv("WEBAPP_URL", "")
 
 VLESS_PORT = os.getenv("VLESS_PORT", "443")
 VLESS_SECURITY = os.getenv("VLESS_SECURITY", "reality")
