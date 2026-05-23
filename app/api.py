@@ -26,7 +26,7 @@ from app.db import (
     update_user_link,
     add_device,
 )
-from app.services.vpn import rotate_user_key
+from app.services.vpn import rotate_user_key, add_device_to_panel
 
 
 @asynccontextmanager
@@ -128,11 +128,33 @@ async def get_devices(user_id: int):
 
 @app.post("/api/user/{user_id}/devices", response_model=DeviceOut, tags=["devices"])
 async def create_device(user_id: int, body: DeviceCreateIn):
-    """Создаёт новое устройство для пользователя."""
-    await _get_user_or_404(user_id)
-    device = await add_device(user_id, body.device_name)
+    """Создаёт новый клиент в VPN-панели и сохраняет устройство в БД."""
+    user = await _get_user_or_404(user_id)
+
+    if user.get("status") not in ("ACTIVE", "TRIAL"):
+        raise HTTPException(status_code=403, detail="User is not active")
+
+    vless_link, client_uuid, err = await add_device_to_panel(
+        user_id=user_id,
+        username=user.get("username") or f"user_{user_id}",
+        device_name=body.device_name,
+    )
+
+    if err or not vless_link:
+        raise HTTPException(status_code=500, detail=err or "Panel error")
+
+    device_id = await add_device(
+        user_id=user_id,
+        device_name=body.device_name,
+        client_uuid=client_uuid,
+        vless_link=vless_link,
+    )
+
+    devices_raw = await get_user_devices(user_id)
+    device = next((d for d in devices_raw if d["id"] == device_id), None)
     if not device:
-        raise HTTPException(status_code=500, detail="Failed to create device")
+        raise HTTPException(status_code=500, detail="Device created but not found")
+
     return DeviceOut(
         id=device["id"],
         device_name=device["device_name"],
