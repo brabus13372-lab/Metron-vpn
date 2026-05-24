@@ -323,11 +323,22 @@ async def get_billing(user_id: int):
 
 @app.post("/api/user/{user_id}/rotate-key", response_model=RotateKeyResponse, tags=["security"])
 async def rotate_key(user_id: int):
-    """Перевыпускает VLESS ключ пользователя через панель."""
+    """
+    Перевыпускает VLESS ключ пользователя через панель.
+    Если у пользователя статус TRIAL и ключа ещё не было —
+    это первая активация триала: в ответе is_trial_activation=True.
+    """
     user = await _get_user_or_404(user_id)
+    status = user.get("status")
 
-    if user.get("status") not in ("ACTIVE", "TRIAL"):
-        raise HTTPException(status_code=403, detail="User is not active")
+    if status not in ("ACTIVE", "TRIAL"):
+        raise HTTPException(
+            status_code=403,
+            detail="Subscription is not active. Please top up your balance.",
+        )
+
+    # Запоминаем, был ли ключ до ротации — нужно для флага триала
+    had_key_before = bool(user.get("vless_link"))
 
     try:
         new_link, new_uuid, err = await rotate_user_key(
@@ -343,7 +354,9 @@ async def rotate_key(user_id: int):
 
     await update_user_link(user_id, new_link, new_uuid)
 
-    return RotateKeyResponse(vless_link=new_link)
+    is_trial_activation = (status == "TRIAL" and not had_key_before)
+
+    return RotateKeyResponse(vless_link=new_link, is_trial_activation=is_trial_activation)
 
 
 # ---------------------------------------------------------------------------
@@ -413,8 +426,6 @@ async def submit_support_ticket(
             f"💬 {html.escape(message)}{files_info}"
         )
 
-        # Кнопка "Ответить" — идентична той что уже есть в forward_to_admin в support.py
-        # callback_data="reply_{user_id}" → запускает admin_reply_button_handler → FSM состояние
         reply_kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="✍️ Ответить", callback_data=f"reply_{user_id}")]
         ])

@@ -51,6 +51,8 @@ class OkResponse(BaseModel):
 class RotateKeyResponse(BaseModel):
     ok: bool = True
     vless_link: Optional[str] = None
+    # True when this is the first key issuance for a TRIAL user (no key existed before)
+    is_trial_activation: bool = False
 
 
 class RotateDeviceKeyResponse(BaseModel):

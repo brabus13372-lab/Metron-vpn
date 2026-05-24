@@ -300,6 +300,21 @@
       padding: var(--space-2) 0 var(--space-1);
       font-style: italic;
     }
+
+    /* ---------- Триал-баннер в карточке ключа ---------- */
+    .trial-banner {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      background: color-mix(in oklch, var(--color-gold) 12%, var(--color-surface));
+      border: 1px solid color-mix(in oklch, var(--color-gold) 30%, transparent);
+      border-radius: var(--radius-md);
+      padding: var(--space-2) var(--space-3);
+      font-size: var(--text-xs);
+      color: var(--color-gold);
+      font-weight: 600;
+      margin-bottom: var(--space-3);
+    }
   </style>
 </head>
 <body>
@@ -356,7 +371,7 @@
           <div class="card-title">Ключ аккаунта</div>
           <div style="font-size:var(--text-xs); color:var(--color-text-faint);">Общий ключ, не связан с устройствами</div>
         </div>
-        <button class="btn btn-ghost" id="btn-rotate" onclick="rotateKey()" style="flex-shrink:0; padding:var(--space-2) var(--space-3); font-size:var(--text-xs); gap:var(--space-2);">
+        <button class="btn btn-ghost" id="btn-rotate" onclick="handleKeyBtn()" style="flex-shrink:0; padding:var(--space-2) var(--space-3); font-size:var(--text-xs); gap:var(--space-2);">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
             <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
@@ -364,6 +379,7 @@
           Обновить
         </button>
       </div>
+      <div id="trial-banner-area"></div>
       <div class="key-block" id="key-block">
         <span class="key-text" id="vless-key">Ключ не найден</span>
         <button class="copy-btn" id="btn-copy-key" onclick="copyKey()" aria-label="Скопировать ключ">
@@ -637,6 +653,29 @@
     </div>
   </div>
 
+  <!-- Modal: 🎉 Триал активирован -->
+  <div class="modal-overlay" id="modal-trial">
+    <div class="modal-sheet" style="text-align:center;">
+      <div style="font-size:2.5rem; margin-bottom:var(--space-3);">🎉</div>
+      <div class="modal-title" style="text-align:center;">Пробный период начался!</div>
+      <div class="modal-desc" style="text-align:center; max-width:28ch; margin-inline:auto;">3 дня бесплатно. Ключ готов — скопируйте и вставьте в v2RayTun.</div>
+      <div class="key-block" style="margin-bottom:var(--space-5); text-align:left;">
+        <span class="key-text" id="modal-trial-key-text"></span>
+        <button class="copy-btn" onclick="copyTrialKey()" aria-label="Скопировать ключ">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="9" y="9" width="13" height="13" rx="2"/>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-primary btn-full" onclick="copyTrialKey()">Скопировать ключ</button>
+        <button class="btn btn-ghost btn-full" onclick="closeModal('modal-trial'); openInstruction();">Инструкция по подключению</button>
+        <button class="btn btn-ghost btn-full" onclick="closeModal('modal-trial')">Закрыть</button>
+      </div>
+    </div>
+  </div>
+
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script type="module">
     import { fetchUserData, rotateKey as apiRotateKey, rotateDeviceKey as apiRotateDeviceKey, fetchBotConfig } from '../assets/js/api.js';
@@ -653,6 +692,7 @@
     let _activeDevice = null;
     let _primaryDeviceId = null;
     let _botName = null;
+    let _userStatus = null;  // 'ACTIVE' | 'TRIAL' | 'INACTIVE' | 'EXPIRED'
 
     if (tgUser) {
       const fullName = [tgUser.first_name, tgUser.last_name].filter(Boolean).join(' ');
@@ -700,6 +740,7 @@
         INACTIVE: { label: '⛔ Отключена', cls: 'badge-error'   },
         EXPIRED:  { label: '❌ Истекла',   cls: 'badge-error'   },
       };
+      _userStatus = data.status;
       const st = statusMap[data.status] ?? { label: '— Нет данных', cls: 'badge-muted' };
       const badge = document.getElementById('status-badge');
       badge.textContent = st.label;
@@ -710,32 +751,19 @@
       document.getElementById('sub-cost').textContent   = cost ? `${parseFloat(cost).toFixed(2)} ₽/мес` : '—';
 
       _vlessKey = data.vless_link ?? '';
-      const keyEl  = document.getElementById('vless-key');
-      const btnRotate = document.getElementById('btn-rotate');
-      const btnCopy   = document.getElementById('btn-copy-key');
+      const keyEl = document.getElementById('vless-key');
+      const btnCopy = document.getElementById('btn-copy-key');
 
       if (_vlessKey) {
         keyEl.textContent = _vlessKey;
         btnCopy.disabled  = false;
-        btnRotate.className = 'btn btn-ghost';
-        btnRotate.style.cssText = 'flex-shrink:0; padding:var(--space-2) var(--space-3); font-size:var(--text-xs); gap:var(--space-2);';
-        btnRotate.innerHTML = `
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
-            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-          </svg>
-          Обновить`;
       } else {
         keyEl.textContent = 'Ключ ещё не выдан';
         btnCopy.disabled  = true;
-        btnRotate.className = 'btn btn-primary';
-        btnRotate.style.cssText = 'flex-shrink:0; padding:var(--space-2) var(--space-4); font-size:var(--text-xs); gap:var(--space-2);';
-        btnRotate.innerHTML = `
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-          </svg>
-          Получить ключ`;
       }
+
+      renderKeyButton(_userStatus, _vlessKey);
+      renderTrialBanner(_userStatus, _vlessKey);
 
       _devices = data.devices ?? [];
 
@@ -748,6 +776,132 @@
 
       renderDevices(_devices);
     }
+
+    // ------------------------------------------------------------------
+    // Умная кнопка ключа
+    // Состояния:
+    //   INACTIVE/EXPIRED + нет ключа → disabled «Пополните баланс»
+    //   TRIAL + нет ключа            → primary «Получить пробный ключ»
+    //   ACTIVE + нет ключа           → primary «Получить ключ»
+    //   Есть ключ (любой статус)     → ghost «Обновить» (rotate)
+    // ------------------------------------------------------------------
+    function renderKeyButton(status, key) {
+      const btn = document.getElementById('btn-rotate');
+      btn.disabled = false;
+
+      if (key) {
+        // Ключ есть — показываем rotate
+        btn.className = 'btn btn-ghost';
+        btn.style.cssText = 'flex-shrink:0; padding:var(--space-2) var(--space-3); font-size:var(--text-xs); gap:var(--space-2);';
+        btn.innerHTML = `
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+          </svg>
+          Обновить`;
+        return;
+      }
+
+      if (status === 'INACTIVE' || status === 'EXPIRED') {
+        btn.disabled = true;
+        btn.className = 'btn btn-ghost';
+        btn.style.cssText = 'flex-shrink:0; padding:var(--space-2) var(--space-3); font-size:var(--text-xs); opacity:0.45; cursor:not-allowed;';
+        btn.innerHTML = 'Пополните баланс';
+        return;
+      }
+
+      // TRIAL или ACTIVE без ключа
+      btn.className = 'btn btn-primary';
+      btn.style.cssText = 'flex-shrink:0; padding:var(--space-2) var(--space-4); font-size:var(--text-xs); gap:var(--space-2);';
+      const label = status === 'TRIAL' ? 'Получить пробный ключ' : 'Получить ключ';
+      btn.innerHTML = `
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+        </svg>
+        ${label}`;
+    }
+
+    // ------------------------------------------------------------------
+    // Триал-баннер под заголовком карточки ключа
+    // ------------------------------------------------------------------
+    function renderTrialBanner(status, key) {
+      const area = document.getElementById('trial-banner-area');
+      if (status === 'TRIAL' && !key) {
+        area.innerHTML = `
+          <div class="trial-banner">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+            </svg>
+            3 дня бесплатно — нажмите, чтобы активировать
+          </div>`;
+      } else if (status === 'TRIAL' && key) {
+        area.innerHTML = `
+          <div class="trial-banner">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+            Пробный период активен
+          </div>`;
+      } else {
+        area.innerHTML = '';
+      }
+    }
+
+    // ------------------------------------------------------------------
+    // Кнопка ключа — единый обработчик
+    // ------------------------------------------------------------------
+    window.handleKeyBtn = async function() {
+      const btn = document.getElementById('btn-rotate');
+      if (btn.disabled) return;
+
+      // Если ключ уже есть — стандартная ротация
+      await rotateKey();
+    };
+
+    // ------------------------------------------------------------------
+    // Ротация / получение ключа аккаунта
+    // ------------------------------------------------------------------
+    window.rotateKey = async function() {
+      if (!USER_ID) return;
+      const btn = document.getElementById('btn-rotate');
+      const prevHTML = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = `<div class="spinner"></div> Получаем...`;
+      try {
+        const res = await apiRotateKey(USER_ID);
+        _vlessKey = res.vless_link ?? '';
+        const keyEl = document.getElementById('vless-key');
+        keyEl.textContent = _vlessKey || 'Ошибка';
+        if (_vlessKey) {
+          document.getElementById('btn-copy-key').disabled = false;
+          renderKeyButton(_userStatus, _vlessKey);
+          renderTrialBanner(_userStatus, _vlessKey);
+
+          if (res.is_trial_activation) {
+            // Первый ключ триала — показываем специальную модалку
+            document.getElementById('modal-trial-key-text').textContent = _vlessKey;
+            openModal('modal-trial');
+          } else {
+            showToast('✅ Ключ получен');
+          }
+        } else {
+          btn.disabled = false;
+          btn.innerHTML = prevHTML;
+          showToast('❌ Не удалось получить ключ — пустой ответ', 'error');
+        }
+      } catch (e) {
+        const msg = e?.message ? `Ошибка ключа: ${e.message}` : '❌ Ошибка получения ключа';
+        showToast(msg, 'error');
+        btn.disabled = false;
+        btn.innerHTML = prevHTML;
+      }
+    };
+
+    window.copyTrialKey = function() {
+      const text = document.getElementById('modal-trial-key-text').textContent;
+      if (!text) return;
+      navigator.clipboard.writeText(text).then(() => showToast('✅ Ключ скопирован'));
+    };
 
     // ------------------------------------------------------------------
     // Рендер списка устройств
@@ -921,47 +1075,6 @@
     }
 
     // ------------------------------------------------------------------
-    // Ротация основного ключа аккаунта
-    // ------------------------------------------------------------------
-    window.rotateKey = async function() {
-      if (!USER_ID) return;
-      const btn = document.getElementById('btn-rotate');
-      btn.disabled = true;
-      btn.innerHTML = `<div class="spinner"></div> Получаем...`;
-      try {
-        const res = await apiRotateKey(USER_ID);
-        _vlessKey = res.vless_link ?? res.key ?? '';
-        const keyEl = document.getElementById('vless-key');
-        keyEl.textContent = _vlessKey || 'Ошибка';
-        if (_vlessKey) {
-          document.getElementById('btn-copy-key').disabled = false;
-          btn.className = 'btn btn-ghost';
-          btn.style.cssText = 'flex-shrink:0; padding:var(--space-2) var(--space-3); font-size:var(--text-xs); gap:var(--space-2);';
-          btn.innerHTML = `
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
-              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-            </svg>
-            Обновить`;
-          showToast('✅ Ключ получен');
-        } else {
-          btn.disabled = false;
-          btn.innerHTML = 'Получить ключ';
-          showToast('❌ Не удалось получить ключ — пустой ответ', 'error');
-        }
-      } catch (e) {
-        const msg = e?.message ? `Ошибка ключа: ${e.message}` : '❌ Ошибка получения ключа';
-        showToast(msg, 'error');
-        btn.disabled = false;
-        btn.innerHTML = `
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-          </svg>
-          Получить ключ`;
-      }
-    };
-
-    // ------------------------------------------------------------------
     // Добавить устройство
     // ------------------------------------------------------------------
     window.openAddDevice = function() {
@@ -1011,7 +1124,7 @@
     };
 
     // ------------------------------------------------------------------
-    // Модалка с новым ключом после ротации
+    // Модалка с новым ключом после ротации устройства
     // ------------------------------------------------------------------
     function openKeyModal(link) {
       document.getElementById('modal-new-key-text').textContent = link;
@@ -1090,7 +1203,6 @@
 
     // ------------------------------------------------------------------
     // showToast — единая функция
-    // type: 'default' | 'error'
     // ------------------------------------------------------------------
     function showToast(msg, type = 'default') {
       const existing = document.querySelector('.toast-popup');
@@ -1130,7 +1242,6 @@
       el.addEventListener('animationend', () => el.remove(), { once: true });
     }
 
-    function showError(msg) { showToast('⚠️ ' + msg, 'error'); }
     function escHtml(s) {
       return String(s)
         .replace(/&/g,'&amp;').replace(/</g,'&lt;')
