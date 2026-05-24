@@ -1,7 +1,8 @@
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -13,6 +14,8 @@ from app.schemas import (
     OkResponse,
     RotateKeyResponse,
     RotateDeviceKeyResponse,
+    SupportTicketListOut,
+    SupportTicketOut,
     HealthResponse,
 )
 
@@ -29,9 +32,16 @@ from app.db import (
     add_device,
     get_device_by_id,
     update_device_link,
+    create_ticket,
+    get_user_tickets,
 )
 from app.services.vpn import rotate_user_key, add_device_to_panel, rotate_client_uuid
 from app.config import BOT_NAME
+
+# Maximum number of files per support ticket
+_SUPPORT_MAX_FILES = 5
+# Maximum single file size: 10 MB
+_SUPPORT_MAX_FILE_SIZE = 10 * 1024 * 1024
 
 
 @asynccontextmanager
@@ -220,13 +230,14 @@ async def rotate_device_key(user_id: int, device_id: int):
         raise HTTPException(status_code=409, detail="Device is disabled")
 
     old_uuid = device["client_uuid"]
-    username = user.get("username") or f"user_{user_id}"
+    # Используем device_name (не username) — именно с ним строился vless_link при создании
+    device_label = device["device_name"]
 
     try:
         new_uuid, new_link, err = await rotate_client_uuid(
             old_uuid=old_uuid,
             user_id=user_id,
-            username=username,
+            username=device_label,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
@@ -291,8 +302,98 @@ async def rotate_key(user_id: int):
 
 
 # ---------------------------------------------------------------------------
-#Config bot_name
+# Support tickets
 # ---------------------------------------------------------------------------
+
+@app.post(
+    "/api/user/{user_id}/support",
+    response_model=SupportTicketOut,
+    tags=["support"],
+    status_code=201,
+)
+async def submit_support_ticket(
+    user_id: int,
+    message: str = Form(..., min_length=5, max_length=1000),
+    files: Optional[List[UploadFile]] = File(default=None),
+):
+    """
+    Принять обращение в поддержку.
+    Файлы сохраняются только как метаданные (имя, размер, тип) — бинарные данные
+    не сохраняются в БД. При необходимости добавить объектное хранилище (S3/MinIO).
+    """
+    await _get_user_or_404(user_id)
+
+    files_meta: List[Dict[str, Any]] = []
+    if files:
+        seen_names: set[str] = set()
+        for upload in files[:_SUPPORT_MAX_FILES]:
+            # читаем только первые байты для проверки размера
+            content = await upload.read()
+            if len(content) > _SUPPORT_MAX_FILE_SIZE:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File '{upload.filename}' exceeds 10 MB limit",
+                )
+            name = upload.filename or "file"
+            if name in seen_names:
+                continue
+            seen_names.add(name)
+            files_meta.append({
+                "name": name,
+                "size": len(content),
+                "type": upload.content_type or "application/octet-stream",
+            })
+
+    ticket_id = await create_ticket(
+        user_id=user_id,
+        message=message,
+        files=files_meta,
+    )
+
+    # Получаем только что созданный тикет для ответа
+    tickets = await get_user_tickets(user_id, limit=1)
+    ticket = next((t for t in tickets if t["id"] == ticket_id), None)
+    if not ticket:
+        raise HTTPException(status_code=500, detail="Ticket created but not found")
+
+    return SupportTicketOut(
+        id=ticket["id"],
+        message=ticket["message"],
+        status=ticket["status"],
+        files=ticket["files"] if isinstance(ticket["files"], list) else [],
+        created_at=ticket["created_at"],
+        answered_at=ticket.get("answered_at"),
+    )
+
+
+@app.get(
+    "/api/user/{user_id}/support",
+    response_model=SupportTicketListOut,
+    tags=["support"],
+)
+async def get_support_tickets(user_id: int):
+    """Вернуть историю обращений пользователя."""
+    await _get_user_or_404(user_id)
+
+    raw = await get_user_tickets(user_id, limit=20)
+    tickets = [
+        SupportTicketOut(
+            id=t["id"],
+            message=t["message"],
+            status=t["status"],
+            files=t["files"] if isinstance(t["files"], list) else [],
+            created_at=t["created_at"],
+            answered_at=t.get("answered_at"),
+        )
+        for t in raw
+    ]
+    return SupportTicketListOut(tickets=tickets)
+
+
+# ---------------------------------------------------------------------------
+# Config bot_name
+# ---------------------------------------------------------------------------
+
 @app.get("/api/config/bot", tags=["config"])
 async def get_bot_config():
     from app.config import BOT_NAME

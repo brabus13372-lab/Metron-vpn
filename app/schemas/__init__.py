@@ -7,6 +7,8 @@ from app.schemas.user import (
     RotateKeyResponse,
     RotateDeviceKeyResponse,
     HealthResponse,
+    SupportTicketOut,
+    SupportTicketListOut,
 )
 
 __all__ = [
@@ -18,4 +20,6 @@ __all__ = [
     "RotateKeyResponse",
     "RotateDeviceKeyResponse",
     "HealthResponse",
+    "SupportTicketOut",
+    "SupportTicketListOut",
 ]

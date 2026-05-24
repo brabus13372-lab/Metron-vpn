@@ -1,6 +1,6 @@
 from __future__ import annotations
 from datetime import datetime
-from typing import Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict
 
 
@@ -49,9 +49,26 @@ class RotateKeyResponse(BaseModel):
     ok: bool = True
     vless_link: Optional[str] = None
 
+
 class RotateDeviceKeyResponse(BaseModel):
     vless_link: str
     client_uuid: str
 
+
 class HealthResponse(BaseModel):
     status: str = "ok"
+
+
+class SupportTicketOut(BaseModel):
+    """Одно обращение в поддержку."""
+    id: int
+    message: str
+    status: str
+    files: List[Dict[str, Any]] = []
+    created_at: datetime
+    answered_at: Optional[datetime] = None
+
+
+class SupportTicketListOut(BaseModel):
+    """Список обращений пользователя."""
+    tickets: List[SupportTicketOut]
