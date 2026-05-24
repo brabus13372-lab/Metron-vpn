@@ -247,7 +247,13 @@ async def remove_device_from_panel(client_uuid: str, user_id: int):
 
 async def activate_all_user_devices(user_id: int):
     """
-    Enables all panel clients for the given user.
+    Enables panel clients for the given user.
+
+    Only activates devices that were disabled by billing (disabled_reason='billing'
+    or disabled_reason=None for legacy rows). Devices disabled voluntarily by the
+    user (disabled_reason='user_request') are intentionally skipped — the user
+    chose to turn them off and that choice must be preserved after a topup.
+
     Returns (success_count, fail_count, errors).
     """
     devices = await get_user_devices(user_id)
@@ -260,6 +266,14 @@ async def activate_all_user_devices(user_id: int):
     errors = []
 
     for dev in devices:
+        # Skip devices the user manually disabled — preserve their choice.
+        if dev.get("disabled_reason") == "user_request":
+            logger.info(
+                "panel.activate_device.skip user_id=%s device=%s reason=user_request",
+                user_id, dev["device_name"],
+            )
+            continue
+
         dev_name = dev["device_name"]
         client_uuid = dev["client_uuid"]
         try:
@@ -299,7 +313,12 @@ async def activate_all_user_devices(user_id: int):
 
 async def deactivate_all_user_devices(user_id: int):
     """
-    Disables all panel clients for the given user.
+    Disables all currently active panel clients for the given user.
+
+    Skips devices that are already inactive (is_active=False) to avoid
+    unnecessary panel calls. The DB state is managed by the caller
+    (billing._deactivate_all_user_devices calls deactivate_device before this).
+
     Returns (success_count, fail_count).
     """
     devices = await get_user_devices(user_id)
@@ -311,6 +330,14 @@ async def deactivate_all_user_devices(user_id: int):
     fail_count = 0
 
     for dev in devices:
+        # Only send panel call for currently active devices.
+        if not dev.get("is_active", True):
+            logger.info(
+                "panel.deactivate_device.skip user_id=%s device=%s reason=already_inactive",
+                user_id, dev["device_name"],
+            )
+            continue
+
         dev_name = dev["device_name"]
         client_uuid = dev["client_uuid"]
         try:
