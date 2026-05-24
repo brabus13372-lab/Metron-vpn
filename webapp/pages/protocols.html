@@ -135,7 +135,7 @@
     </div>
 
     <!-- Детали -->
-    <div class="card" style="margin-bottom: var(--space-4);">
+    <div class="card">
       <div class="card-title" style="margin-bottom: var(--space-1);">VLESS + Reality</div>
       <div class="info-row">
         <span class="info-label">Стоимость</span>
@@ -157,23 +157,6 @@
         <span class="info-label">Клиенты</span>
         <span class="info-value">V2RayTun · Hiddify</span>
       </div>
-    </div>
-
-    <!-- Ключ -->
-    <div class="card">
-      <div class="card-title" style="margin-bottom: var(--space-3);">Ваш ключ</div>
-      <div class="key-block">
-        <span class="key-text" id="vless-key">Загрузка...</span>
-        <button class="copy-btn" id="btn-copy" onclick="copyKey()" aria-label="Скопировать ключ">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="9" y="9" width="13" height="13" rx="2"/>
-            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-          </svg>
-        </button>
-      </div>
-      <p style="font-size:var(--text-xs); color:var(--color-text-faint); margin-top:var(--space-2);">
-        Вставьте ключ в V2RayTun или Hiddify для подключения
-      </p>
     </div>
 
   </main>
@@ -204,51 +187,8 @@
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script type="module">
-    import { fetchUserData } from '../assets/js/api.js';
-
     const tg = window.Telegram?.WebApp;
     if (tg) { tg.expand(); tg.ready(); }
-
-    const USER_ID = tg?.initDataUnsafe?.user?.id ?? null;
-    let _vlessKey = '';
-
-    async function loadKey() {
-      if (!USER_ID) {
-        document.getElementById('vless-key').textContent = 'Откройте через Telegram';
-        return;
-      }
-      try {
-        const data = await fetchUserData(USER_ID);
-        _vlessKey = data.vless_key ?? '';
-        document.getElementById('vless-key').textContent = _vlessKey || 'Ключ не найден';
-        if (!_vlessKey) document.getElementById('btn-copy').disabled = true;
-      } catch {
-        document.getElementById('vless-key').textContent = 'Ошибка загрузки';
-      }
-    }
-
-    window.copyKey = function() {
-      if (!_vlessKey) return;
-      navigator.clipboard.writeText(_vlessKey).then(() => {
-        const btn = document.getElementById('btn-copy');
-        btn.classList.add('copied');
-        showToast('✅ Ключ скопирован');
-        setTimeout(() => btn.classList.remove('copied'), 2000);
-      });
-    };
-
-    function showToast(msg) {
-      const t = document.getElementById('toast');
-      t.textContent = msg;
-      t.style.display = 'block';
-      t.style.animation = 'none';
-      t.offsetHeight;
-      t.style.animation = '';
-      clearTimeout(t._timer);
-      t._timer = setTimeout(() => { t.style.display = 'none'; }, 2500);
-    }
-
-    loadKey();
   </script>
 
 </body>
