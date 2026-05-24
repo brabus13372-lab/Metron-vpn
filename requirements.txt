@@ -1,31 +1,30 @@
 # Telegram bot framework
 aiogram==3.20.0
 
+# Web API
+fastapi>=0.115.0
+uvicorn[standard]
+
+# Async HTTP client (панель 3x-ui, все внешние запросы)
+httpx>=0.27.0
+
 # PostgreSQL async driver
 asyncpg
+
+# Pydantic v2 (FastAPI использует автоматически)
+pydantic>=2.0.0
 
 # Environment variables
 python-dotenv
 
-# Job scheduler
+# Job scheduler (биллинг + уведомления)
 APScheduler==3.11.0
-
-# HTTP client for panel API
-aiohttp
-urllib3
-
-# TTL cache (used in support.py)
-cachetools
-
-# Timezone support (Python 3.9+ stdlib, but backport for older envs)
-# zoneinfo is stdlib in 3.9+, no install needed
-# tzdata is needed on systems without system timezone data (e.g. slim Docker images)
-tzdata
-
-
-fastapi
 
 # Required for Form(...) and UploadFile in FastAPI endpoints
 python-multipart
 
-uvicorn[standard]
+# TTL cache (support.py rate limiting)
+cachetools
+
+# Timezone data для Docker/slim-образов (stdlib zoneinfo требует tzdata)
+tzdata
