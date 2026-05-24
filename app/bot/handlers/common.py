@@ -107,7 +107,7 @@ async def start_cmd(message: types.Message, command: CommandObject) -> None:
             from app.config import PAYMENT_AMOUNTS
             amounts = PAYMENT_AMOUNTS
         except ImportError:
-            amounts = [10000, 20000, 50000, 100000]
+            amounts = [10000, 20000, 30000, 60000]
 
         builder = InlineKeyboardBuilder()
         for amount_cents in amounts:
