@@ -1,3 +1,6 @@
+"""
+Metron VPN — FastAPI entry point.
+"""
 import html
 import logging
 from contextlib import asynccontextmanager
@@ -44,21 +47,24 @@ from app.services.vpn import (
     rotate_client_uuid,
     remove_device_from_panel,
 )
+from app.services.billing import billing_engine
 from app.config import BOT_NAME, ADMIN_ID
 from app.bot.bot import bot
 
 logger = logging.getLogger(__name__)
 
-# Maximum number of files per support ticket
 _SUPPORT_MAX_FILES = 5
-# Maximum single file size: 10 MB
 _SUPPORT_MAX_FILE_SIZE = 10 * 1024 * 1024
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    billing_engine.set_bot(bot)
+    billing_engine.start()
+    logger.info("Billing engine started")
     yield
+    billing_engine.stop()
     await close_db()
 
 
@@ -117,12 +123,11 @@ async def health():
 
 
 # ---------------------------------------------------------------------------
-# Config (публичный, без авторизации)
+# Config
 # ---------------------------------------------------------------------------
 
 @app.get("/api/config", tags=["system"])
 async def get_config():
-    """Публичные настройки для фронтенда."""
     return {"bot_name": BOT_NAME or ""}
 
 
@@ -165,7 +170,6 @@ async def get_devices(user_id: int):
 
 @app.post("/api/user/{user_id}/devices", response_model=DeviceOut, tags=["devices"])
 async def create_device(user_id: int, body: DeviceCreateIn):
-    """Создаёт новый клиент в VPN-панели и сохраняет устройство в БД."""
     user = await _get_user_or_404(user_id)
 
     if user.get("status") not in ("ACTIVE", "TRIAL"):
@@ -205,12 +209,10 @@ async def create_device(user_id: int, body: DeviceCreateIn):
 
 @app.delete("/api/user/{user_id}/devices/{device_id}", response_model=OkResponse, tags=["devices"])
 async def delete_device(user_id: int, device_id: int):
-    """Деактивирует устройство (soft delete — is_active=False) и отключает клиент в панели."""
     device = await get_device_by_id(device_id)
     if not device or device["user_id"] != user_id:
         raise HTTPException(status_code=404, detail="Device not found")
 
-    # Отключаем клиент в панели только если устройство ещё активно
     if device["is_active"]:
         from app.core.panel_client import update_client_fields
         from app.config import INBOUND_ID
@@ -224,7 +226,6 @@ async def delete_device(user_id: int, device_id: int):
                 "delete_device.panel_disable_fail device_id=%s uuid=%s msg=%s",
                 device_id, device["client_uuid"], msg,
             )
-            # Не блокируем — клиент мог уже не существовать в панели
 
     ok = await deactivate_device(device_id, user_id, reason="user_request")
     if not ok:
@@ -234,7 +235,6 @@ async def delete_device(user_id: int, device_id: int):
 
 @app.delete("/api/user/{user_id}/devices/{device_id}/hard", response_model=OkResponse, tags=["devices"])
 async def hard_delete_device(user_id: int, device_id: int):
-    """Полное удаление устройства из панели и БД."""
     device = await get_device_by_id(device_id)
     if not device or device["user_id"] != user_id:
         raise HTTPException(status_code=404, detail="Device not found")
@@ -248,7 +248,6 @@ async def hard_delete_device(user_id: int, device_id: int):
             "hard_delete_device.panel_fail device_id=%s uuid=%s err=%s",
             device_id, device["client_uuid"], panel_err,
         )
-        # Не останавливаемся — remove_device_from_panel толерантен к "not found"
 
     deleted = await remove_device(device_id, user_id)
     if not deleted:
@@ -262,7 +261,6 @@ async def hard_delete_device(user_id: int, device_id: int):
     tags=["devices"],
 )
 async def rotate_device_key(user_id: int, device_id: int):
-    """Перевыпускает VLESS ключ конкретного устройства."""
     user = await _get_user_or_404(user_id)
 
     if user.get("status") not in ("ACTIVE", "TRIAL"):
@@ -323,11 +321,6 @@ async def get_billing(user_id: int):
 
 @app.post("/api/user/{user_id}/rotate-key", response_model=RotateKeyResponse, tags=["security"])
 async def rotate_key(user_id: int):
-    """
-    Перевыпускает VLESS ключ пользователя через панель.
-    Если у пользователя статус TRIAL и ключа ещё не было —
-    это первая активация триала: в ответе is_trial_activation=True.
-    """
     user = await _get_user_or_404(user_id)
     status = user.get("status")
 
@@ -337,7 +330,6 @@ async def rotate_key(user_id: int):
             detail="Subscription is not active. Please top up your balance.",
         )
 
-    # Запоминаем, был ли ключ до ротации — нужно для флага триала
     had_key_before = bool(user.get("vless_link"))
 
     try:
@@ -374,10 +366,6 @@ async def submit_support_ticket(
     message: str = Form(..., min_length=5, max_length=1000),
     files: Optional[List[UploadFile]] = File(default=None),
 ):
-    """
-    Принять обращение в поддержку.
-    Сохраняет тикет в БД и отправляет админу уведомление с кнопкой "Ответить" через Telegram-бот.
-    """
     user = await _get_user_or_404(user_id)
 
     files_meta: List[Dict[str, Any]] = []
@@ -411,7 +399,6 @@ async def submit_support_ticket(
     if not ticket:
         raise HTTPException(status_code=500, detail="Ticket created but not found")
 
-    # ── Уведомление админу в Telegram с кнопкой "Ответить" ────────────────────
     if ADMIN_ID:
         username = user.get("username") or f"id{user_id}"
         files_info = ""
@@ -437,16 +424,8 @@ async def submit_support_ticket(
                 parse_mode="HTML",
                 reply_markup=reply_kb,
             )
-            logger.info(
-                "support notify sent admin=%s ticket=%s user=%s",
-                ADMIN_ID, ticket_id, user_id,
-            )
         except Exception as exc:
-            logger.warning(
-                "support notify failed admin=%s ticket=%s: %s",
-                ADMIN_ID, ticket_id, exc,
-            )
-    # ───────────────────────────────────────────────────────────────────────
+            logger.warning("support notify failed admin=%s ticket=%s: %s", ADMIN_ID, ticket_id, exc)
 
     return SupportTicketOut(
         id=ticket["id"],
@@ -464,9 +443,7 @@ async def submit_support_ticket(
     tags=["support"],
 )
 async def get_support_tickets(user_id: int):
-    """Вернуть историю обращений пользователя."""
     await _get_user_or_404(user_id)
-
     raw = await get_user_tickets(user_id, limit=20)
     tickets = [
         SupportTicketOut(

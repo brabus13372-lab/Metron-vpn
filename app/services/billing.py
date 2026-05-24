@@ -5,6 +5,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 from app.config import ADMIN_ID
 from app.db import (
@@ -34,10 +35,10 @@ class BillingEngine:
         self._setup_jobs()
 
     def set_bot(self, bot: Bot) -> None:
-        """Передаём Bot-инстанс при старте приложения."""
         self._bot = bot
 
     def _setup_jobs(self) -> None:
+        # Ежедневное списание — 00:05 MSK
         self.scheduler.add_job(
             self._daily_billing_cycle,
             trigger=CronTrigger(hour=0, minute=5, timezone="Europe/Moscow"),
@@ -48,17 +49,18 @@ class BillingEngine:
             coalesce=True,
             misfire_grace_time=3600,
         )
+        # Проверка истёкших триалов — каждый час (догоняет пропущенные после рестарта)
         self.scheduler.add_job(
             self._trial_expiry_cycle,
-            trigger=CronTrigger(hour=0, minute=10, timezone="Europe/Moscow"),
+            trigger=IntervalTrigger(hours=1),
             id="trial_expiry",
-            name="Trial expiry deactivation",
+            name="Trial expiry deactivation (hourly)",
             replace_existing=True,
             max_instances=1,
             coalesce=True,
             misfire_grace_time=3600,
         )
-        logger.info("Billing jobs scheduled: billing=00:05 MSK, trial=00:10 MSK")
+        logger.info("Billing jobs scheduled: billing=00:05 MSK, trial=every 1h")
 
     # -----------------------------------------------------------------------
     # Helpers
@@ -99,10 +101,8 @@ class BillingEngine:
                 return
 
             logger.info("billing.daily_cycle.users_found count=%s", len(user_ids))
-
             for user_id in user_ids:
                 await self._process_user_billing(user_id)
-
             logger.info("billing.daily_cycle.done")
         except Exception as exc:
             logger.error("billing.daily_cycle.critical_error err=%s", exc, exc_info=True)
@@ -114,7 +114,6 @@ class BillingEngine:
                 logger.debug("billing.skip user_id=%s reason=no_paid_devices", user_id)
                 return
 
-            # ИСПРАВЛЕНО: используем дату по Москве, а не UTC
             from zoneinfo import ZoneInfo
             billing_date = datetime.now(ZoneInfo("Europe/Moscow")).date()
 
@@ -144,8 +143,7 @@ class BillingEngine:
                 await self._deactivate_all_user_devices(user_id)
                 await self._notify_admin(
                     f"<b>Недостаточно средств у пользователя {user_id}</b>\n"
-                    f"Баланс: {balance_before:.2f}р\n"
-                    f"Ежедневный расход: {daily_cost_rub:.2f}р\n"
+                    f"Баланс: {balance_before:.2f}р\nЕжедневный расход: {daily_cost_rub:.2f}р\n"
                     "Устройства деактивированы без списания."
                 )
                 return
@@ -163,8 +161,7 @@ class BillingEngine:
                 await self._deactivate_all_user_devices(user_id)
                 await self._notify_admin(
                     f"<b>Баланс пользователя {user_id} исчерпан</b>\n"
-                    f"Баланс: {new_balance:.2f}р\n"
-                    f"Ежедневный расход: {daily_cost_rub:.2f}р\n"
+                    f"Баланс: {new_balance:.2f}р\nЕжедневный расход: {daily_cost_rub:.2f}р\n"
                     "Все устройства деактивированы."
                 )
 
@@ -172,7 +169,7 @@ class BillingEngine:
             logger.error("billing.process_failed user_id=%s err=%s", user_id, exc, exc_info=True)
 
     # -----------------------------------------------------------------------
-    # Trial expiry
+    # Trial expiry (hourly)
     # -----------------------------------------------------------------------
 
     async def _trial_expiry_cycle(self) -> None:
@@ -193,10 +190,9 @@ class BillingEngine:
     async def _process_trial_expiry(self, user_id: int):
         try:
             logger.info("trial_expiry.start user_id=%s", user_id)
-
-            # просто меняем статус, устройства не трогаем
+            # Триал истёк — переводим в ACTIVE (устройства продолжают работать,
+            # теперь будет идти ежедневное списание)
             await update_user_status(user_id, "ACTIVE")
-
             logger.info("trial_expiry.done user_id=%s", user_id)
 
             await self._notify_user(
@@ -205,13 +201,11 @@ class BillingEngine:
                 "Теперь доступ к VPN тарифицируется ежедневно.\n"
                 "Пополните баланс в профиле, чтобы не потерять доступ."
             )
-
             await self._notify_admin(
                 f"<b>Триал истёк</b>\n"
                 f"Пользователь: <code>{user_id}</code>\n"
                 f"Статус → ACTIVE, устройства продолжают работать."
             )
-
         except Exception as exc:
             logger.error("trial_expiry.failed user_id=%s err=%s", user_id, exc, exc_info=True)
 
@@ -221,16 +215,12 @@ class BillingEngine:
 
     async def _deactivate_all_user_devices(self, user_id: int) -> None:
         logger.info("billing.deactivate_devices.start user_id=%s", user_id)
-
         devices = await get_user_devices(user_id)
 
-        # 1. Сначала помечаем в БД — если бот упадёт, следующий биллинг не начислит
         for dev in devices:
             await deactivate_device(dev["id"], user_id, reason="insufficient_funds")
 
-        # 2. Потом выключаем в панели
         success_count, fail_count = await deactivate_all_user_devices(user_id)
-
         logger.info(
             "billing.deactivate_devices.done user_id=%s ok=%s fail=%s",
             user_id, success_count, fail_count,
@@ -245,15 +235,13 @@ class BillingEngine:
             "Мы попытались отключить VPN-подключения, но часть операций могла завершиться с ошибкой.\n"
             "Пополните баланс и при необходимости обратитесь в поддержку."
         )
-
         await self._notify_user(user_id, user_text)
 
         if fail_count > 0:
             await self._notify_admin(
                 f"<b>Частичная ошибка деактивации устройств</b>\n"
                 f"Пользователь: <code>{user_id}</code>\n"
-                f"Успешно: {success_count}\n"
-                f"Ошибок: {fail_count}"
+                f"Успешно: {success_count}\nОшибок: {fail_count}"
             )
 
     # -----------------------------------------------------------------------
