@@ -10,7 +10,6 @@ if __name__ == "__main__":
     import uvicorn
     from app.api import app as fastapi_app
     import urllib3
-    from aiogram import Bot
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -23,6 +22,7 @@ if __name__ == "__main__":
     ensure_sanitized_logging()
 
     from app.bot.dispatcher import dp
+    from app.bot.bot import bot          # ← синглтон, один на всё приложение
     from app.config import ADMIN_ID, BOT_TOKEN, VLESS_SID
     from app.db import init_db, close_db
     from app.services.notifications import check_notifications
@@ -50,7 +50,6 @@ if __name__ == "__main__":
             logging.warning("VLESS_SID не задан. Если REALITY требует SID, ключи могут не работать.")
 
         await init_db()
-        bot = Bot(token=BOT_TOKEN)
 
         scheduler = AsyncIOScheduler()
         scheduler.add_job(check_notifications, "interval", minutes=10, args=[bot])
