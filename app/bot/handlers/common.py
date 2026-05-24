@@ -97,7 +97,7 @@ async def start_cmd(message: types.Message, command: CommandObject) -> None:
             empty_expire,
             vless_link="",
             uuid_val="",
-            status="NEW",
+            status="TRIAL",
         )
         logger.info("start_cmd.new_user user_id=%s", user_id)
 
