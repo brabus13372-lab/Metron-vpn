@@ -12,7 +12,7 @@ from app.schemas import (
     UserBillingOut,
     OkResponse,
     RotateKeyResponse,
-    RotateDeviceKeyResponse,   
+    RotateDeviceKeyResponse,
     HealthResponse,
 )
 
@@ -27,8 +27,8 @@ from app.db import (
     deactivate_device,
     update_user_link,
     add_device,
-    get_device_by_id,        
-    update_device_link,      
+    get_device_by_id,
+    update_device_link,
 )
 from app.services.vpn import rotate_user_key, add_device_to_panel, rotate_client_uuid
 
@@ -71,6 +71,7 @@ def _build_devices(devices_raw: list[dict]) -> list[DeviceOut]:
             is_active=d["is_active"],
             monthly_cost=float(d["monthly_cost"]),
             daily_cost=round(float(d["monthly_cost"]) / 30, 2),
+            vless_link=d.get("vless_link"),
             created_at=d.get("created_at"),
         )
         for d in devices_raw
@@ -165,6 +166,7 @@ async def create_device(user_id: int, body: DeviceCreateIn):
         is_active=device["is_active"],
         monthly_cost=float(device["monthly_cost"]),
         daily_cost=round(float(device["monthly_cost"]) / 30, 2),
+        vless_link=device.get("vless_link"),
         created_at=device.get("created_at"),
     )
 
@@ -185,6 +187,7 @@ async def hard_delete_device(user_id: int, device_id: int):
     if not deleted:
         raise HTTPException(status_code=404, detail="Device not found")
     return OkResponse()
+
 
 @app.post(
     "/api/user/{user_id}/devices/{device_id}/rotate",

@@ -12,6 +12,7 @@ class DeviceOut(BaseModel):
     is_active: bool
     monthly_cost: float
     daily_cost: float
+    vless_link: Optional[str] = None
     created_at: Optional[datetime] = None
 
 
