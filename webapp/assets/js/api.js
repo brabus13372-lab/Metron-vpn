@@ -45,3 +45,10 @@ export async function rotateDeviceKey(userId, deviceId) {
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json(); // { vless_link, client_uuid }
 }
+
+//Bot name
+export async function fetchBotConfig() {
+  const res = await fetch('/api/config/bot');
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json(); // { bot_name }
+}

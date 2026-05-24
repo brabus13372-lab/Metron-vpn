@@ -81,6 +81,33 @@ async def send_dynamic_instruction(
     else:
         await target.answer(text, parse_mode="HTML", disable_web_page_preview=True)
 
+@dp.message(F.text.startswith("/start topup"))
+async def cmd_start_topup(message: types.Message) -> None:
+    """Deep link из WebApp: сразу показываем меню оплаты."""
+    builder = InlineKeyboardBuilder()
+    try:
+        from app.config import PAYMENT_AMOUNTS
+        amounts = PAYMENT_AMOUNTS
+    except ImportError:
+        amounts = [10000, 20000, 30000, 500000]
+
+    for amount_cents in amounts:
+        rub = amount_cents // 100
+        builder.row(
+            types.InlineKeyboardButton(
+                text=f"💳 Пополнить на {rub} руб.",
+                callback_data=f"pay_amount_{amount_cents}",
+            )
+        )
+    builder.row(
+        types.InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_profile")
+    )
+
+    await message.answer(
+        "<b>💳 Пополнение баланса</b>\n\nВыберите сумму:",
+        parse_mode="HTML",
+        reply_markup=builder.as_markup(),
+    )
 
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message, command: CommandObject) -> None:

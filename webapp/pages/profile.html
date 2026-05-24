@@ -435,7 +435,7 @@
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script type="module">
-    import { fetchUserData, rotateKey as apiRotateKey, rotateDeviceKey as apiRotateDeviceKey } from '../assets/js/api.js';
+    import { fetchUserData, rotateKey as apiRotateKey, rotateDeviceKey as apiRotateDeviceKey, fetchBotConfig } from '../assets/js/api.js';
 
     const tg = window.Telegram?.WebApp;
     if (tg) { tg.expand(); tg.ready(); tg.enableClosingConfirmation(); }
@@ -448,6 +448,7 @@
     let _devices   = [];
     // Текущее открытое устройство в шторке
     let _activeDevice = null;
+    let _botName = null;
 
     if (tgUser) {
       const fullName = [tgUser.first_name, tgUser.last_name].filter(Boolean).join(' ');
@@ -460,16 +461,25 @@
     // ------------------------------------------------------------------
     // Загрузка профиля
     // ------------------------------------------------------------------
-    async function loadProfile() {
-      if (!USER_ID) { showError('Откройте приложение через Telegram'); return; }
-      try {
-        const data = await fetchUserData(USER_ID);
-        renderProfile(data);
-      } catch (e) {
-        console.error(e);
-        showError('Ошибка загрузки данных');
-      }
-    }
+  async function loadProfile() {
+       if (!USER_ID) { showError('Откройте приложение через Telegram'); return; }
+       try {
+         const data = await fetchUserData(USER_ID);
+         renderProfile(data);
+       } catch (e) {
+         console.error(e);
+         showError('Ошибка загрузки данных');
+       }
+       // Грузим botName для кнопки оплаты
+       try {
+         if (!_botName) {
+           const cfg = await fetchBotConfig();
+           _botName = cfg.bot_name;
+         }
+       } catch (e) {
+         console.warn('fetchBotConfig failed:', e);
+       }
+     }
 
     function renderProfile(data) {
       const bal = parseFloat(data.balance ?? 0).toFixed(2);
@@ -507,7 +517,7 @@
       _devices = data.devices ?? [];
       renderDevices(_devices);
     }
-
+    
     // ------------------------------------------------------------------
     // Рендер списка устройств
     // ------------------------------------------------------------------
@@ -717,7 +727,19 @@
     // ------------------------------------------------------------------
     // Разное
     // ------------------------------------------------------------------
-    window.openTopup    = function() { if (tg) tg.close(); };
+    window.openTopup = function() {
+       if (!_botName) {
+         // Фолбек: просто закрыть webapp, бот откроется сам
+         if (tg) tg.close();
+         return;
+       }
+       // Открываем бота на экране оплаты через deep link
+       if (tg) {
+         tg.openTelegramLink(`https://t.me/${_botName}?start=topup`);
+       } else {
+         window.open(`https://t.me/${_botName}?start=topup`, '_blank');
+       }
+     };
     window.openInstruction = function() {
       if (tg) {
         tg.showPopup({

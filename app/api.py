@@ -291,6 +291,17 @@ async def rotate_key(user_id: int):
 
 
 # ---------------------------------------------------------------------------
+#Config bot_name
+# ---------------------------------------------------------------------------
+@app.get("/api/config/bot", tags=["config"])
+async def get_bot_config():
+    from app.config import BOT_NAME
+    if not BOT_NAME:
+        raise HTTPException(status_code=503, detail="BOT_NAME not configured")
+    return {"bot_name": BOT_NAME}
+
+
+# ---------------------------------------------------------------------------
 # Webapp — должен быть последним!
 # ---------------------------------------------------------------------------
 
