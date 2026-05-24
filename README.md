@@ -7,30 +7,32 @@
 [![APScheduler](https://img.shields.io/badge/APScheduler-3.11-orange)](https://apscheduler.readthedocs.io/)
 [![3x-ui](https://img.shields.io/badge/panel-3x--ui-red?logo=github)](https://github.com/MHSanaei/3x-ui)
 [![YooKassa](https://img.shields.io/badge/payments-YooKassa-8b5cf6)](https://yookassa.ru/)
-[![httpx](https://img.shields.io/badge/HTTP-httpx-brightgreen)](https://www.python-httpx.org/)
+[![aiohttp](https://img.shields.io/badge/HTTP-aiohttp-2c5bb4)](https://docs.aiohttp.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-> **Telegram-бот + FastAPI WebApp** для автоматизации выдачи VLESS-доступа через панель [3x-ui](https://github.com/MHSanaei/3x-ui).  
-> Управление устройствами, ежедневный биллинг, ротация ключей, оплата через YooKassa.
+> **Telegram bot + FastAPI WebApp** for automated VLESS access management via [3x-ui](https://github.com/MHSanaei/3x-ui) panel.  
+> Device management, daily billing, key rotation, payments via YooKassa.
+
+🇷🇺 [Русская версия](README.ru.md)
 
 ---
 
-## Содержание
+## Table of Contents
 
-- [Архитектура](#архитектура)
-- [Стек технологий](#стек-технологий)
-- [Требования](#требования)
-- [Установка](#установка)
-- [Переменные окружения](#переменные-окружения)
-- [API эндпоинты](#api-эндпоинты)
-- [Биллинг](#биллинг)
-- [Безопасность](#безопасность)
-- [Скрипты обслуживания](#скрипты-обслуживания)
-- [Разработка](#разработка)
+- [Architecture](#architecture)
+- [Tech Stack](#tech-stack)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Environment Variables](#environment-variables)
+- [API Endpoints](#api-endpoints)
+- [Billing](#billing)
+- [Security](#security)
+- [Maintenance Scripts](#maintenance-scripts)
+- [Development](#development)
 
 ---
 
-## Архитектура
+## Architecture
 
 ```text
 Metron-vpn/
@@ -38,88 +40,89 @@ Metron-vpn/
 ├── main.py                          # Entrypoint: uvicorn + aiogram long-polling
 │
 ├── app/
-│   ├── config.py                    # dotenv → константы (BOT_TOKEN, PANEL_URL, …)
-│   ├── api.py                       # FastAPI: все REST-эндпоинты WebApp
-│   ├── db.py                        # asyncpg: все SQL-запросы
-│   ├── schemas.py                   # Pydantic v2 модели запросов / ответов
-│   ├── vless.py                     # Сборка VLESS-ссылки из компонентов
-│   ├── logging_sanitizer.py         # Глобальный фильтр логов (маскирует токены/куки)
+│   ├── config.py                    # dotenv → constants (BOT_TOKEN, PANEL_URL, …)
+│   ├── api.py                       # FastAPI: all REST endpoints for WebApp
+│   ├── db.py                        # asyncpg: all SQL queries
+│   ├── schemas.py                   # Pydantic v2 request / response models
+│   ├── vless.py                     # VLESS link builder
+│   ├── logging_sanitizer.py         # Global log filter (masks tokens/cookies)
 │   │
 │   ├── core/
-│   │   └── panel_client.py          # httpx-клиент для 3x-ui REST API (login, CRUD)
+│   │   └── panel_client.py          # aiohttp client for 3x-ui REST API (login, CRUD)
 │   │
 │   ├── services/
-│   │   ├── billing.py               # BillingEngine: ежедневное списание + TRIAL-цикл
-│   │   ├── vpn.py                   # Бизнес-логика: rotate_user_key, add_device_to_panel
-│   │   └── notifications.py         # APScheduler: напоминания об истечении подписки
+│   │   ├── billing.py               # BillingEngine: daily charge + TRIAL cycle
+│   │   ├── vpn.py                   # Business logic: rotate_user_key, add_device_to_panel
+│   │   └── notifications.py         # APScheduler: subscription expiry reminders
 │   │
 │   └── bot/
-│       ├── bot.py                   # Экземпляр aiogram Bot
-│       ├── dispatcher.py            # Dispatcher + регистрация хэндлеров
-│       ├── keyboards.py             # Reply-клавиатуры
+│       ├── bot.py                   # aiogram Bot instance
+│       ├── dispatcher.py            # Dispatcher + handler registration
+│       ├── keyboards.py             # Reply keyboards
 │       └── handlers/
-│           ├── common.py            # /start, главное меню
-│           ├── profile.py           # Профиль, устройства, ключи
-│           ├── payments.py          # YooKassa: invoice → pre_checkout → успех
-│           ├── support.py           # FSM тикет-система (пользователь → админ)
-│           └── admin.py             # Админ-команды: рассылка, статистика
+│           ├── common.py            # /start, main menu
+│           ├── profile.py           # Profile, devices, keys
+│           ├── payments.py          # YooKassa: invoice → pre_checkout → success
+│           ├── support.py           # FSM ticket system (user → admin)
+│           └── admin.py             # Admin commands: broadcast, stats
 │
-├── webapp/                          # Telegram WebApp (статика, отдаётся FastAPI)
-│   └── index.html                   # SPA: профиль, устройства, биллинг, поддержка
+├── webapp/                          # Telegram WebApp (static, served by FastAPI)
+│   └── index.html                   # SPA: profile, devices, billing, support
 │
-├── migrate_db.py                    # Одноразовая миграция SQLite → PostgreSQL
-├── cleanup_orphan_keys.py           # ⚠️  Сервисный скрипт: чистка orphan-клиентов
+├── migrate_db.py                    # One-time SQLite → PostgreSQL migration
+├── cleanup_orphan_keys.py           # ⚠️  Service script: orphan client cleanup
 ├── requirements.txt
 ├── .env.example
 └── .gitignore
 ```
 
-**Потоки данных:**
+**Data flows:**
 - `Telegram → aiogram handlers → services → db / panel_client`
 - `WebApp → FastAPI (api.py) → db / panel_client → 3x-ui`
 
 ---
 
-## Стек технологий
+## Tech Stack
 
-| Слой | Библиотека | Версия |
+| Layer | Library | Version |
 |---|---|---|
 | Bot framework | aiogram | 3.20 |
 | Web API | FastAPI + uvicorn | 0.115+ |
-| HTTP (панель) | httpx | 0.27+ |
+| HTTP (panel) | aiohttp | latest |
+| HTTP (scripts) | httpx | 0.27+ |
 | Database | PostgreSQL / asyncpg | latest |
 | Scheduler | APScheduler | 3.11 |
-| Валидация | Pydantic v2 | latest |
+| Validation | Pydantic v2 | latest |
 | Config | python-dotenv | latest |
 | Payments | YooKassa (Telegram Payments) | — |
 | Forms/Files | python-multipart | latest |
 | Cache | cachetools | latest |
 | Timezone | tzdata | latest |
 
-> **Примечание:** `aiohttp` и `urllib3` удалены — весь HTTP теперь через `httpx` (async-first, единый клиент).
+> `urllib3` was removed — it is synchronous and was never actually used.
 
 ---
 
-## Требования
+## Requirements
 
-### Панель
+### Panel
 
-Бот работает с **[3x-ui](https://github.com/MHSanaei/3x-ui)** — панелью с REST API для управления Xray.
+The bot works with **[3x-ui](https://github.com/MHSanaei/3x-ui)** — an Xray management panel with REST API.
 
-- Работающий инстанс 3x-ui, доступный с хоста бота
-- Настроенный **VLESS inbound** (REALITY или TLS) с известным `INBOUND_ID`
-- Учётные данные панели (`PANEL_USER` / `PANEL_PASS`)
+- A running 3x-ui instance reachable from the bot host
+- A configured **VLESS inbound** (REALITY or TLS) with a known `INBOUND_ID`
+- Panel credentials (`PANEL_USER` / `PANEL_PASS`)
 
-> Инструкция по установке: [3x-ui Wiki](https://github.com/MHSanaei/3x-ui/wiki)
+> Setup guide: [3x-ui Wiki](https://github.com/MHSanaei/3x-ui/wiki)
 
-### Программное обеспечение
+### Software
 
 - Python **3.10+**
-- PostgreSQL (доступен с хоста бота)
+- PostgreSQL (reachable from the bot host)
 
 ---
 
-## Установка
+## Installation
 
 ```bash
 git clone https://github.com/brabus13372-lab/Metron-vpn.git
@@ -132,179 +135,179 @@ pip install -U pip
 pip install -r requirements.txt
 
 cp .env.example .env
-# Заполни .env — см. раздел «Переменные окружения»
+# Fill in .env — see Environment Variables section
 
 python3 main.py
 ```
 
 ---
 
-## Переменные окружения
+## Environment Variables
 
-Все переменные описаны в `.env.example`. Обязательные:
+All variables are documented in `.env.example`. Required ones:
 
-| Переменная | Описание |
+| Variable | Description |
 |---|---|
-| `BOT_TOKEN` | Telegram bot token от @BotFather |
-| `ADMIN_ID` | Telegram user ID администратора (число) |
-| `PANEL_URL` | Base URL панели 3x-ui (без trailing `/`) |
-| `PANEL_USER` | Логин в панели |
-| `PANEL_PASS` | Пароль в панели |
-| `INBOUND_ID` | ID inbound в панели (integer, обычно `1`) |
-| `SERVER_IP` | Публичный IP сервера (вставляется в VLESS-ссылки) |
+| `BOT_TOKEN` | Telegram bot token from @BotFather |
+| `ADMIN_ID` | Telegram user ID of the administrator (integer) |
+| `PANEL_URL` | 3x-ui panel base URL (no trailing `/`) |
+| `PANEL_USER` | Panel login |
+| `PANEL_PASS` | Panel password |
+| `INBOUND_ID` | Inbound ID in the panel (integer, usually `1`) |
+| `SERVER_IP` | Public server IP (inserted into VLESS links) |
 | `DATABASE_URL` | asyncpg DSN: `postgresql://user:pass@host/db` |
 | `VLESS_PBK` | REALITY public key |
-| `PAY_TOKEN` | YooKassa provider token (получить через @BotFather) |
+| `PAY_TOKEN` | YooKassa provider token (obtain via @BotFather) |
 
-> ⚠️ **Никогда не коммить `.env`.** Файл исключён в `.gitignore`.
+> ⚠️ **Never commit `.env`.** The file is excluded in `.gitignore`.
 
 ---
 
-## API эндпоинты
+## API Endpoints
 
-WebApp взаимодействует с ботом через REST API (`app/api.py`).
+The WebApp communicates with the bot via REST API (`app/api.py`).
 
-### Профиль
+### Profile
 
-| Метод | URL | Описание |
+| Method | URL | Description |
 |---|---|---|
-| `GET` | `/api/user/{id}` | Профиль: баланс, статус, устройства, ключ |
-| `GET` | `/api/user/{id}/billing` | Биллинг: баланс, стоимость/день, дней осталось |
+| `GET` | `/api/user/{id}` | Profile: balance, status, devices, key |
+| `GET` | `/api/user/{id}/billing` | Billing: balance, cost/day, days remaining |
 
-### Устройства
+### Devices
 
-| Метод | URL | Описание |
+| Method | URL | Description |
 |---|---|---|
-| `GET` | `/api/user/{id}/devices` | Список устройств |
-| `POST` | `/api/user/{id}/devices` | Создать устройство (панель + DB) |
-| `DELETE` | `/api/user/{id}/devices/{dev_id}` | Деактивировать устройство (soft) |
-| `DELETE` | `/api/user/{id}/devices/{dev_id}/hard` | Удалить из панели и DB (hard) |
-| `POST` | `/api/user/{id}/devices/{dev_id}/rotate` | Ротировать ключ устройства |
+| `GET` | `/api/user/{id}/devices` | List devices |
+| `POST` | `/api/user/{id}/devices` | Create device (panel + DB) |
+| `DELETE` | `/api/user/{id}/devices/{dev_id}` | Deactivate device (soft) |
+| `DELETE` | `/api/user/{id}/devices/{dev_id}/hard` | Remove from panel and DB (hard) |
+| `POST` | `/api/user/{id}/devices/{dev_id}/rotate` | Rotate device key |
 
-### Ключ аккаунта
+### Account Key
 
-| Метод | URL | Описание |
+| Method | URL | Description |
 |---|---|---|
-| `POST` | `/api/user/{id}/rotate-key` | Выдать / ротировать аккаунтный ключ |
+| `POST` | `/api/user/{id}/rotate-key` | Issue / rotate the account key |
 
-> ⚠️ **Гард:** `/rotate-key` возвращает `409` если у пользователя уже есть активные устройства.  
-> Аккаунтный ключ предназначен **только для первичной активации** (TRIAL, ещё нет устройств).  
-> Все последующие ключи создаются через `POST /devices`.
+> ⚠️ **Guard:** `/rotate-key` returns `409` if the user already has active devices.  
+> The account key is intended **only for initial activation** (TRIAL, no devices yet).  
+> All subsequent keys are created via `POST /devices`.
 
-### Поддержка
+### Support
 
-| Метод | URL | Описание |
+| Method | URL | Description |
 |---|---|---|
-| `POST` | `/api/user/{id}/support` | Создать тикет (текст + до 5 файлов ≤10 MB) |
-| `GET` | `/api/user/{id}/support` | История тикетов (последние 20) |
+| `POST` | `/api/user/{id}/support` | Create ticket (text + up to 5 files ≤10 MB) |
+| `GET` | `/api/user/{id}/support` | Ticket history (last 20) |
 
-### Системные
+### System
 
-| Метод | URL | Описание |
+| Method | URL | Description |
 |---|---|---|
 | `GET` | `/health` | Healthcheck |
-| `GET` | `/api/config` | Имя бота |
+| `GET` | `/api/config` | Bot name |
 
 ---
 
-## Биллинг
+## Billing
 
-`app/services/billing.py` — `BillingEngine` на APScheduler.
+`app/services/billing.py` — `BillingEngine` powered by APScheduler.
 
-**Логика:**
-1. Раз в сутки списывает `SUM(devices.monthly_cost) / 30` с баланса пользователя
-2. При нулевом балансе — деактивирует подписку (`status = SUSPENDED`)
-3. TRIAL: по истечении срока — автоматический перевод на платную подписку или деактивация
-4. Уведомления: APScheduler отправляет напоминания до истечения доступа
+**Logic:**
+1. Once a day deducts `SUM(devices.monthly_cost) / 30` from the user's balance
+2. On zero balance — suspends the subscription (`status = SUSPENDED`)
+3. TRIAL: on expiry — auto-converts to paid or deactivates
+4. Notifications: APScheduler sends reminders before access expires
 
-> ⚠️ **Критически важно:** биллинг считает **только записи в таблице `devices`**.  
-> Аккаунтный ключ (`users.vless_link`) **не тарифицируется**.  
-> Не создавай клиентов в панели в обход таблицы `devices` — это дыра в биллинге.
+> ⚠️ **Critical:** billing only counts **records in the `devices` table**.  
+> The account key (`users.vless_link`) **is not billed**.  
+> Never create panel clients bypassing the `devices` table — that is a billing hole.
 
 ---
 
-## Безопасность
+## Security
 
-### Маскировка логов
+### Log Masking
 
-`app/logging_sanitizer.py` — глобальный фильтр, заменяет `[MASKED]`:
+`app/logging_sanitizer.py` — global filter, replaces with `[MASKED]`:
 - Telegram bot tokens
-- `Cookie` / `Set-Cookie` заголовки
-- JSON-поля: `password`, `token`, `key`
-- Runtime-секреты из `app.config`
+- `Cookie` / `Set-Cookie` headers
+- JSON fields: `password`, `token`, `key`
+- Runtime secrets from `app.config`
 
 ### SSL
 
-> ⚠️ Запросы к 3x-ui выполняются с `verify=False` (httpx) для самоподписанных сертификатов.  
-> Если у панели валидный CA-сертификат — убери `verify=False` в `app/core/panel_client.py`.
+> ⚠️ Requests to 3x-ui are made with `verify=False` (aiohttp) for self-signed certificates.  
+> If your panel has a valid CA certificate — remove `ssl=False` in `app/core/panel_client.py`.
 
-### Серверные гарды
+### Server-Side Guards
 
-| Эндпоинт | Код | Условие |
+| Endpoint | Code | Condition |
 |---|---|---|
-| `POST /rotate-key` | `409` | У пользователя есть активные devices |
-| `DELETE /devices/{id}` | `409` | Удаляется последнее активное устройство |
-| `POST /devices` | `403` | Статус пользователя не `ACTIVE` / `TRIAL` |
+| `POST /rotate-key` | `409` | User already has active devices |
+| `DELETE /devices/{id}` | `409` | Deleting the last active device |
+| `POST /devices` | `403` | User status is not `ACTIVE` / `TRIAL` |
 
-> Все гарды продублированы на сервере — клиентская проверка в WebApp не является единственной защитой.
+> All guards are enforced server-side — WebApp client checks are not the only protection.
 
-### Git hygiene
+### Git Hygiene
 
-`.gitignore` исключает: `.env`, `*.db*`, venv, кэши, логи, TLS-ключи/сертификаты.
+`.gitignore` excludes: `.env`, `*.db*`, venv, caches, logs, TLS keys/certificates.
 
 ---
 
-## Скрипты обслуживания
+## Maintenance Scripts
 
 ### `cleanup_orphan_keys.py`
 
-**Одноразовый миграционный скрипт.** Удаляет «призрачные» аккаунтные клиенты в 3x-ui панели — те, что были созданы через `/rotate-key` у пользователей, которые уже перешли на `devices`.
+**One-time migration script.** Removes "ghost" account clients from the 3x-ui panel — those created via `/rotate-key` for users who have already migrated to `devices`.
 
-**Когда запускать:** один раз, сразу после деплоя гарда в `/rotate-key`.
+**When to run:** once, immediately after deploying the guard on `/rotate-key`.
 
-> ⚠️ Перед `--apply` — обязательно проверь список через `--dry-run`.
+> ⚠️ Always verify with `--dry-run` before `--apply`.
 
 ```bash
-# Dry-run: показать что будет удалено (ничего не меняет)
+# Dry-run: show what would be deleted (no changes)
 export $(grep -v '^#' .env | xargs) && python cleanup_orphan_keys.py --dry-run
 
-# Apply: применить очистку
+# Apply: run the cleanup
 export $(grep -v '^#' .env | xargs) && python cleanup_orphan_keys.py --apply
 ```
 
-Скрипт **идемпотентен** — повторный запуск безопасен. Если панель недоступна для какого-то UUID — БД не трогается, пользователь появится снова при следующем запуске.
+The script is **idempotent** — re-running is safe. If the panel is unreachable for a UUID, the DB is not touched and the entry will be retried on the next run.
 
 ### `migrate_db.py`
 
-Одноразовая миграция данных SQLite → PostgreSQL (использовалась при переходе на prod-базу). Для новых установок не нужен.
+One-time data migration from SQLite → PostgreSQL (used during the production database transition). Not needed for new installations.
 
 ---
 
-## Разработка
+## Development
 
-### Добавить хэндлер
+### Add a Handler
 
-1. Создай файл в `app/bot/handlers/`
-2. Используй `dp` из `app.bot.dispatcher`, регистрируй декораторами
-3. Импортируй файл в `app/bot/dispatcher.py`
+1. Create a file in `app/bot/handlers/`
+2. Use `dp` from `app.bot.dispatcher`, register with decorators
+3. Import the file in `app/bot/dispatcher.py`
 
-### Добавить сервис
+### Add a Service
 
-1. Бизнес-логику помести в `app/services/`
-2. Telegram-специфичный код держи в хэндлерах — сервисы тестируемы независимо
+1. Place business logic in `app/services/`
+2. Keep Telegram-specific code in handlers — services are testable independently
 
-### Добавить API эндпоинт
+### Add an API Endpoint
 
-1. Добавь эндпоинт в `app/api.py`
-2. Добавь Pydantic-схемы в `app/schemas.py`
-3. SQL-запросы — только в `app/db.py` (никакого inline SQL в `api.py`)
+1. Add the endpoint in `app/api.py`
+2. Add Pydantic schemas in `app/schemas.py`
+3. SQL queries go only in `app/db.py` (no inline SQL in `api.py`)
 
-### Логирование
+### Logging
 
-Логируй свободно — `logging_sanitizer.py` автоматически замаскирует секреты.
+Log freely — `logging_sanitizer.py` will automatically mask secrets.
 
 ---
 
 ## Disclaimer
 
-Предоставляется «как есть» для образовательных и операционных целей автоматизации. Ответственность за инфраструктуру, безопасность сервера и законность использования лежит на пользователе.
+Provided as-is for educational and operational automation purposes. Responsibility for infrastructure, server security, and lawful use lies with the operator.
