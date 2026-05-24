@@ -356,7 +356,6 @@
           <div class="card-title">Ключ аккаунта</div>
           <div style="font-size:var(--text-xs); color:var(--color-text-faint);">Общий ключ, не связан с устройствами</div>
         </div>
-        <!-- Кнопка меняется: "Получить ключ" если ключа нет, иначе "Обновить" -->
         <button class="btn btn-ghost" id="btn-rotate" onclick="rotateKey()" style="flex-shrink:0; padding:var(--space-2) var(--space-3); font-size:var(--text-xs); gap:var(--space-2);">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
@@ -638,8 +637,6 @@
     </div>
   </div>
 
-  <div class="toast" id="toast" style="display:none;"></div>
-
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script type="module">
     import { fetchUserData, rotateKey as apiRotateKey, rotateDeviceKey as apiRotateDeviceKey, fetchBotConfig } from '../assets/js/api.js';
@@ -669,13 +666,14 @@
     // Загрузка профиля
     // ------------------------------------------------------------------
     async function loadProfile() {
-      if (!USER_ID) { showError('Откройте приложение через Telegram'); return; }
+      if (!USER_ID) { showToast('⚠️ Откройте приложение через Telegram', 'error'); return; }
       try {
         const data = await fetchUserData(USER_ID);
         renderProfile(data);
       } catch (e) {
         console.error(e);
-        showError('Ошибка загрузки данных');
+        const msg = e?.message ? `Ошибка загрузки: ${e.message}` : 'Ошибка загрузки данных';
+        showToast(msg, 'error');
       }
       try {
         if (!_botName) {
@@ -717,7 +715,6 @@
       const btnCopy   = document.getElementById('btn-copy-key');
 
       if (_vlessKey) {
-        // Ключ есть — показываем кнопку "Обновить" (ghost)
         keyEl.textContent = _vlessKey;
         btnCopy.disabled  = false;
         btnRotate.className = 'btn btn-ghost';
@@ -729,7 +726,6 @@
           </svg>
           Обновить`;
       } else {
-        // Ключа нет — показываем кнопку "Получить ключ" (primary)
         keyEl.textContent = 'Ключ ещё не выдан';
         btnCopy.disabled  = true;
         btnRotate.className = 'btn btn-primary';
@@ -874,7 +870,8 @@
         showToast('✅ Ключ устройства обновлён');
         await loadProfile();
       } catch (e) {
-        showToast('❌ Ошибка обновления ключа');
+        const msg = e?.message ? `Ошибка обновления: ${e.message}` : '❌ Ошибка обновления ключа';
+        showToast(msg, 'error');
         if (btn) {
           btn.disabled = false;
           btn.innerHTML = `
@@ -907,12 +904,16 @@
       btn.innerHTML = `<div class="spinner"></div> Отключаем...`;
       try {
         const res = await fetch(`/api/user/${USER_ID}/devices/${id}`, { method: 'DELETE' });
-        if (!res.ok) throw new Error(res.status);
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => ({}));
+          throw new Error(errBody?.detail || String(res.status));
+        }
         closeModal('modal-delete');
         showToast('✅ Устройство отключено');
         await loadProfile();
       } catch (e) {
-        showToast('❌ Ошибка отключения');
+        const msg = e?.message ? `Ошибка отключения: ${e.message}` : '❌ Ошибка отключения';
+        showToast(msg, 'error');
       } finally {
         btn.disabled = false;
         btn.textContent = 'Отключить';
@@ -932,7 +933,6 @@
         _vlessKey = res.vless_link ?? res.key ?? '';
         const keyEl = document.getElementById('vless-key');
         keyEl.textContent = _vlessKey || 'Ошибка';
-        // После получения ключа — переключаем кнопку в режим "Обновить"
         if (_vlessKey) {
           document.getElementById('btn-copy-key').disabled = false;
           btn.className = 'btn btn-ghost';
@@ -947,12 +947,17 @@
         } else {
           btn.disabled = false;
           btn.innerHTML = 'Получить ключ';
-          showToast('❌ Не удалось получить ключ');
+          showToast('❌ Не удалось получить ключ — пустой ответ', 'error');
         }
       } catch (e) {
-        showToast('❌ Ошибка получения ключа');
+        const msg = e?.message ? `Ошибка ключа: ${e.message}` : '❌ Ошибка получения ключа';
+        showToast(msg, 'error');
         btn.disabled = false;
-        btn.innerHTML = 'Получить ключ';
+        btn.innerHTML = `
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+          Получить ключ`;
       }
     };
 
@@ -966,7 +971,7 @@
 
     window.confirmAddDevice = async function() {
       const name = document.getElementById('input-device-name').value.trim();
-      if (!name || name.length > 50) { showToast('❌ Введите название (1–50 символов)'); return; }
+      if (!name || name.length > 50) { showToast('❌ Введите название (1–50 символов)', 'error'); return; }
       const btn = document.getElementById('btn-confirm-add');
       btn.disabled = true;
       btn.innerHTML = `<div class="spinner"></div> Добавляем...`;
@@ -976,12 +981,16 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ device_name: name }),
         });
-        if (!res.ok) throw new Error(res.status);
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => ({}));
+          throw new Error(errBody?.detail || String(res.status));
+        }
         closeModal('modal-add');
         showToast('✅ Устройство добавлено');
         await loadProfile();
       } catch (e) {
-        showToast('❌ Ошибка добавления устройства');
+        const msg = e?.message ? `Ошибка: ${e.message}` : '❌ Ошибка добавления устройства';
+        showToast(msg, 'error');
       } finally {
         btn.disabled = false;
         btn.textContent = 'Добавить';
@@ -1030,7 +1039,7 @@
     };
 
     window.copyKeyFromInstruction = function() {
-      if (!_vlessKey) { showToast('❌ Ключ не найден'); return; }
+      if (!_vlessKey) { showToast('❌ Ключ не найден', 'error'); return; }
       navigator.clipboard.writeText(_vlessKey).then(() => {
         showToast('✅ Ключ скопирован');
       });
@@ -1079,17 +1088,49 @@
       el.addEventListener('click', e => { if (e.target === el) closeModal(el.id); });
     });
 
-    function showToast(msg) {
-      const t = document.getElementById('toast');
-      t.textContent = msg;
-      t.style.display = 'block';
-      t.style.animation = 'none';
-      t.offsetHeight;
-      t.style.animation = '';
-      clearTimeout(t._timer);
-      t._timer = setTimeout(() => { t.style.display = 'none'; }, 2500);
+    // ------------------------------------------------------------------
+    // showToast — единая функция
+    // type: 'default' | 'error'
+    // ------------------------------------------------------------------
+    function showToast(msg, type = 'default') {
+      const existing = document.querySelector('.toast-popup');
+      if (existing) {
+        clearTimeout(existing._timer);
+        existing.remove();
+      }
+
+      const isError = type === 'error';
+      const duration = isError ? 8000 : 2500;
+
+      const wrap = document.createElement('div');
+      wrap.className = 'toast-popup' + (isError ? ' toast-popup-error' : '');
+
+      const inner = document.createElement('div');
+      inner.className = 'toast-popup-inner';
+      inner.textContent = msg;
+
+      if (isError) {
+        const x = document.createElement('button');
+        x.className = 'toast-popup-close';
+        x.setAttribute('aria-label', 'Закрыть');
+        x.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+        x.onclick = () => hidePopup(wrap);
+        inner.appendChild(x);
+      }
+
+      wrap.appendChild(inner);
+      document.body.appendChild(wrap);
+      wrap._timer = setTimeout(() => hidePopup(wrap), duration);
     }
-    function showError(msg) { showToast('⚠️ ' + msg); }
+
+    function hidePopup(el) {
+      if (!el.isConnected) return;
+      clearTimeout(el._timer);
+      el.classList.add('toast-popup-out');
+      el.addEventListener('animationend', () => el.remove(), { once: true });
+    }
+
+    function showError(msg) { showToast('⚠️ ' + msg, 'error'); }
     function escHtml(s) {
       return String(s)
         .replace(/&/g,'&amp;').replace(/</g,'&lt;')
@@ -1102,6 +1143,59 @@
       if (document.visibilityState === 'visible') loadProfile();
     });
   </script>
+
+  <!-- Инлайн-стили тоста — независимо от components.css -->
+  <style>
+    @keyframes tpIn  { from { opacity:0; transform:translateX(-50%) translateY(10px); } to { opacity:1; transform:translateX(-50%) translateY(0); } }
+    @keyframes tpOut { from { opacity:1; transform:translateX(-50%) translateY(0); } to { opacity:0; transform:translateX(-50%) translateY(10px); } }
+
+    .toast-popup {
+      position: fixed;
+      bottom: calc(var(--nav-height, 60px) + 12px);
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 9999;
+      max-width: calc(100vw - 32px);
+      pointer-events: none;
+      animation: tpIn 0.22s cubic-bezier(0.16,1,0.3,1) both;
+    }
+    .toast-popup.toast-popup-out {
+      animation: tpOut 0.18s ease-in forwards;
+    }
+    .toast-popup-inner {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 16px;
+      border-radius: 999px;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--color-text, #cdccca);
+      background: var(--color-surface-offset, #2d2c2a);
+      border: 1px solid var(--color-border, #393836);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+      white-space: normal;
+      word-break: break-word;
+      max-width: 100%;
+    }
+    .toast-popup-error .toast-popup-inner {
+      background: rgba(247,118,142,0.14);
+      border-color: rgba(247,118,142,0.4);
+      pointer-events: all;
+    }
+    .toast-popup-close {
+      flex-shrink: 0;
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 2px;
+      color: var(--color-text-faint, #5a5957);
+      line-height: 1;
+      border-radius: 4px;
+      transition: color 150ms;
+    }
+    .toast-popup-close:hover { color: var(--color-text, #cdccca); }
+  </style>
 
 </body>
 </html>
