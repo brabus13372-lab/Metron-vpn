@@ -39,3 +39,9 @@ export async function addDevice(userId, deviceName) {
     body: JSON.stringify({ device_name: deviceName }),
   });
 }
+
+export async function rotateDeviceKey(userId, deviceId) {
+  const res = await fetch(`/api/user/${userId}/devices/${deviceId}/rotate`, { method: 'POST' });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json(); // { vless_link, client_uuid }
+}

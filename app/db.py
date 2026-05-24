@@ -809,6 +809,28 @@ class Database:
                 return None
             return {**dict(row), "monthly_cost": self._cents_to_rubles(row["monthly_cost"])}
 
+    # === В класс Database ===
+    async def update_device_link(
+        self,
+        device_id: int,
+        user_id: int,
+        new_uuid: str,
+        new_link: str,
+    ) -> bool:
+        async with self.transaction() as conn:
+            result = await conn.execute(
+                """
+                UPDATE devices
+                SET client_uuid = $1, vless_link = $2
+                WHERE id = $3 AND user_id = $4
+                """,
+                new_uuid,
+                new_link,
+                device_id,
+                user_id,
+            )
+            return result != "UPDATE 0"
+
     async def get_all_users_with_devices(self) -> List[int]:
         async with self.connection() as conn:
             rows = await conn.fetch(
@@ -1175,3 +1197,11 @@ async def get_expired_trial_users() -> List[int]:
 
 async def update_user_status(user_id: int, status: str) -> bool:
     return await get_db().update_user_status(user_id, status)
+
+async def update_device_link(
+    device_id: int,
+    user_id: int,
+    new_uuid: str,
+    new_link: str,
+) -> bool:
+    return await get_db().update_device_link(device_id, user_id, new_uuid, new_link)

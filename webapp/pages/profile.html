@@ -231,7 +231,8 @@
     <!-- VPN-ключ -->
     <div class="card" style="margin-bottom:var(--space-4);">
       <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:var(--space-3);">
-        <div class="card-title">Основной ключ</div>
+          <div class="card-title">Ключ аккаунта</div>
+         <div style="font-size:var(--text-xs); color:var(--color-text-faint); margin-top:var(--space-1);">Общий ключ пользователя, не связан с устройствами</div>
         <button class="btn btn-ghost" id="btn-rotate" onclick="rotateKey()" style="padding:var(--space-2) var(--space-3); font-size:var(--text-xs); gap:var(--space-2);">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
@@ -328,11 +329,30 @@
     </div>
   </div>
 
+  <div class="modal-overlay" id="modal-new-key">
+    <div class="modal-sheet">
+      <div class="modal-title">Ключ обновлён</div>
+      <div class="modal-desc">Новый VLESS ключ для устройства:</div>
+      <div class="key-block" style="margin-bottom:var(--space-4);">
+        <span class="key-text" id="modal-new-key-text"></span>
+        <button class="copy-btn" onclick="copyModalKey()" aria-label="Скопировать ключ">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="9" y="9" width="13" height="13" rx="2"/>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost btn-full" onclick="closeModal('modal-new-key')">Закрыть</button>
+      </div>
+    </div>
+  </div>
+
   <div class="toast" id="toast" style="display:none;"></div>
 
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script type="module">
-    import { fetchUserData, rotateKey as apiRotateKey } from '../assets/js/api.js';
+    import { fetchUserData, rotateKey as apiRotateKey, rotateDeviceKey as apiRotateDeviceKey } from '../assets/js/api.js';
 
     const tg = window.Telegram?.WebApp;
     if (tg) { tg.expand(); tg.ready(); tg.enableClosingConfirmation(); }
@@ -413,6 +433,19 @@ console.log("TG:", JSON.stringify(tg?.initDataUnsafe));
           <div class="device-dot ${dev.is_active ? 'active' : 'inactive'}"></div>
           <span class="device-name">${escHtml(dev.device_name)}</span>
           <span class="device-cost">${parseFloat(dev.monthly_cost ?? 0).toFixed(2)} ₽/мес</span>
+          ${dev.is_active ? `
+            <button
+              class="btn btn-ghost"
+              onclick="event.stopPropagation(); rotateDeviceKey(${dev.id})"
+              style="padding:var(--space-1) var(--space-2); font-size:var(--text-xs); gap:var(--space-1); flex-shrink:0;"
+              id="btn-rotate-dev-${dev.id}"
+              title="Обновить ключ"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+              </svg>
+            </button>` : ''}
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--color-text-faint); flex-shrink:0;"><polyline points="9 18 15 12 9 6"/></svg>
         </div>`).join('');
     }
@@ -433,6 +466,32 @@ console.log("TG:", JSON.stringify(tg?.initDataUnsafe));
         btn.disabled = false;
         btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> Обновить`;
       }
+    };
+
+    window.rotateDeviceKey = async function(deviceId) {
+      if (!USER_ID) return;
+      const btn = document.getElementById(`btn-rotate-dev-${deviceId}`);
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = `<div class="spinner" style="width:12px;height:12px;"></div>`;
+      }
+      try {
+        const res = await apiRotateDeviceKey(USER_ID, deviceId);
+        showToast('✅ Ключ устройства обновлён');
+        // Показываем модалку с новым ключом
+        openKeyModal(res.vless_link);
+        await loadProfile();
+      } catch (e) {
+        showToast('❌ Ошибка обновления ключа устройства');
+      } finally {
+        // После loadProfile кнопки перерисуются — восстанавливать не нужно
+      }
+    };
+
+    window.copyModalKey = function() {
+      const text = document.getElementById('modal-new-key-text').textContent;
+      if (!text) return;
+      navigator.clipboard.writeText(text).then(() => showToast('✅ Ключ скопирован'));
     };
 
     window.copyKey = function() {
@@ -515,6 +574,12 @@ console.log("TG:", JSON.stringify(tg?.initDataUnsafe));
       document.getElementById(id).classList.add('open');
       document.body.style.overflow = 'hidden';
     }
+
+    function openKeyModal(link) {
+      document.getElementById('modal-new-key-text').textContent = link;
+      openModal('modal-new-key');
+    }
+    
     window.closeModal = function(id) {
       document.getElementById(id).classList.remove('open');
       document.body.style.overflow = '';

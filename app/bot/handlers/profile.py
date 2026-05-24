@@ -19,12 +19,13 @@ from app.db import (
     remove_device as delete_device,
 )
 
-async def get_device_by_id(device_id: int):
-    from app.db import get_user_devices
-    # временная заглушка — ищем устройство по id среди всех
-    from app.db import get_db
-    db = get_db()
-    return await db.fetch_one("SELECT * FROM devices WHERE id = :id", {"id": device_id})
+from app.db import (
+    get_user_data_dict as get_user,
+    get_user_devices,
+    add_device,
+    remove_device as delete_device,
+    get_device_by_id,
+)
 
 from app.services.vpn import (
     add_device_to_panel,

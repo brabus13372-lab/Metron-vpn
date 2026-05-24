@@ -12,8 +12,10 @@ from app.schemas import (
     UserBillingOut,
     OkResponse,
     RotateKeyResponse,
+    RotateDeviceKeyResponse,   
     HealthResponse,
 )
+
 from app.db import (
     init_db,
     close_db,
@@ -25,8 +27,10 @@ from app.db import (
     deactivate_device,
     update_user_link,
     add_device,
+    get_device_by_id,        
+    update_device_link,      
 )
-from app.services.vpn import rotate_user_key, add_device_to_panel
+from app.services.vpn import rotate_user_key, add_device_to_panel, rotate_client_uuid
 
 
 @asynccontextmanager
@@ -181,6 +185,46 @@ async def hard_delete_device(user_id: int, device_id: int):
     if not deleted:
         raise HTTPException(status_code=404, detail="Device not found")
     return OkResponse()
+
+@app.post(
+    "/api/user/{user_id}/devices/{device_id}/rotate",
+    response_model=RotateDeviceKeyResponse,
+    tags=["devices"],
+)
+async def rotate_device_key(user_id: int, device_id: int):
+    """Перевыпускает VLESS ключ конкретного устройства."""
+    user = await _get_user_or_404(user_id)
+
+    if user.get("status") not in ("ACTIVE", "TRIAL"):
+        raise HTTPException(status_code=403, detail="User is not active")
+
+    device = await get_device_by_id(device_id)
+    if not device or device["user_id"] != user_id:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    if not device["is_active"]:
+        raise HTTPException(status_code=409, detail="Device is disabled")
+
+    old_uuid = device["client_uuid"]
+    username = user.get("username") or f"user_{user_id}"
+
+    try:
+        new_uuid, new_link, err = await rotate_client_uuid(
+            old_uuid=old_uuid,
+            user_id=user_id,
+            username=username,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    if err or not new_link:
+        raise HTTPException(status_code=500, detail=err or "rotate_client_uuid failed")
+
+    updated = await update_device_link(device_id, user_id, new_uuid, new_link)
+    if not updated:
+        raise HTTPException(status_code=500, detail="DB update failed after panel rotate")
+
+    return RotateDeviceKeyResponse(vless_link=new_link, client_uuid=new_uuid)
 
 
 # ---------------------------------------------------------------------------

@@ -48,6 +48,9 @@ class RotateKeyResponse(BaseModel):
     ok: bool = True
     vless_link: Optional[str] = None
 
+class RotateDeviceKeyResponse(BaseModel):
+    vless_link: str
+    client_uuid: str
 
 class HealthResponse(BaseModel):
     status: str = "ok"
