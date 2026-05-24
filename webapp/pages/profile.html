@@ -356,6 +356,7 @@
           <div class="card-title">Ключ аккаунта</div>
           <div style="font-size:var(--text-xs); color:var(--color-text-faint);">Общий ключ, не связан с устройствами</div>
         </div>
+        <!-- Кнопка меняется: "Получить ключ" если ключа нет, иначе "Обновить" -->
         <button class="btn btn-ghost" id="btn-rotate" onclick="rotateKey()" style="flex-shrink:0; padding:var(--space-2) var(--space-3); font-size:var(--text-xs); gap:var(--space-2);">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
@@ -711,12 +712,33 @@
       document.getElementById('sub-cost').textContent   = cost ? `${parseFloat(cost).toFixed(2)} ₽/мес` : '—';
 
       _vlessKey = data.vless_link ?? '';
-      const keyEl = document.getElementById('vless-key');
+      const keyEl  = document.getElementById('vless-key');
+      const btnRotate = document.getElementById('btn-rotate');
+      const btnCopy   = document.getElementById('btn-copy-key');
+
       if (_vlessKey) {
+        // Ключ есть — показываем кнопку "Обновить" (ghost)
         keyEl.textContent = _vlessKey;
+        btnCopy.disabled  = false;
+        btnRotate.className = 'btn btn-ghost';
+        btnRotate.style.cssText = 'flex-shrink:0; padding:var(--space-2) var(--space-3); font-size:var(--text-xs); gap:var(--space-2);';
+        btnRotate.innerHTML = `
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+          </svg>
+          Обновить`;
       } else {
-        keyEl.textContent = 'Ключ не найден';
-        document.getElementById('btn-copy-key').disabled = true;
+        // Ключа нет — показываем кнопку "Получить ключ" (primary)
+        keyEl.textContent = 'Ключ ещё не выдан';
+        btnCopy.disabled  = true;
+        btnRotate.className = 'btn btn-primary';
+        btnRotate.style.cssText = 'flex-shrink:0; padding:var(--space-2) var(--space-4); font-size:var(--text-xs); gap:var(--space-2);';
+        btnRotate.innerHTML = `
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+          Получить ключ`;
       }
 
       _devices = data.devices ?? [];
@@ -904,17 +926,33 @@
       if (!USER_ID) return;
       const btn = document.getElementById('btn-rotate');
       btn.disabled = true;
-      btn.innerHTML = `<div class="spinner"></div> Обновляем...`;
+      btn.innerHTML = `<div class="spinner"></div> Получаем...`;
       try {
         const res = await apiRotateKey(USER_ID);
         _vlessKey = res.vless_link ?? res.key ?? '';
-        document.getElementById('vless-key').textContent = _vlessKey || 'Ошибка';
-        showToast('✅ Ключ обновлён');
+        const keyEl = document.getElementById('vless-key');
+        keyEl.textContent = _vlessKey || 'Ошибка';
+        // После получения ключа — переключаем кнопку в режим "Обновить"
+        if (_vlessKey) {
+          document.getElementById('btn-copy-key').disabled = false;
+          btn.className = 'btn btn-ghost';
+          btn.style.cssText = 'flex-shrink:0; padding:var(--space-2) var(--space-3); font-size:var(--text-xs); gap:var(--space-2);';
+          btn.innerHTML = `
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+            </svg>
+            Обновить`;
+          showToast('✅ Ключ получен');
+        } else {
+          btn.disabled = false;
+          btn.innerHTML = 'Получить ключ';
+          showToast('❌ Не удалось получить ключ');
+        }
       } catch (e) {
-        showToast('❌ Ошибка обновления ключа');
-      } finally {
+        showToast('❌ Ошибка получения ключа');
         btn.disabled = false;
-        btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> Обновить`;
+        btn.innerHTML = 'Получить ключ';
       }
     };
 
@@ -981,13 +1019,12 @@
     // Инструкция
     // ------------------------------------------------------------------
     window.openInstruction = function() {
-      // Подставляем превью ключа в инструкцию
       const preview = document.getElementById('instr-key-preview');
       if (_vlessKey) {
         const short = _vlessKey.length > 60 ? _vlessKey.slice(0, 60) + '…' : _vlessKey;
         preview.textContent = short;
       } else {
-        preview.textContent = 'Ключ не найден — сначала загрузите профиль';
+        preview.textContent = 'Ключ не найден — сначала нажмите «Получить ключ»';
       }
       openModal('modal-instruction');
     };
