@@ -54,11 +54,12 @@
       border-radius: var(--radius-full);
       flex-shrink: 0;
     }
-    .device-dot.active   { background: var(--color-success); box-shadow: 0 0 6px var(--color-success-glow); }
+    .device-dot.active   { background: var(--color-success); }
     .device-dot.inactive { background: var(--color-text-faint); }
     .device-name { flex: 1; font-size: var(--text-sm); font-weight: 500; }
     .device-cost { font-size: var(--text-xs); color: var(--color-text-faint); }
 
+    /* ---------- Модалки ---------- */
     .modal-overlay {
       position: fixed; inset: 0;
       background: rgba(0,0,0,0.6);
@@ -89,6 +90,43 @@
     .modal-title { font-size: var(--text-base); font-weight: 700; margin-bottom: var(--space-2); }
     .modal-desc  { font-size: var(--text-sm); color: var(--color-text-muted); margin-bottom: var(--space-6); }
     .modal-actions { display: flex; flex-direction: column; gap: var(--space-3); }
+
+    /* ---------- Шторка устройства ---------- */
+    .device-sheet-header {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      margin-bottom: var(--space-5);
+      padding-bottom: var(--space-4);
+      border-bottom: 1px solid var(--color-divider);
+    }
+    .device-sheet-dot {
+      width: 10px; height: 10px;
+      border-radius: var(--radius-full);
+      flex-shrink: 0;
+    }
+    .device-sheet-dot.active   { background: var(--color-success); }
+    .device-sheet-dot.inactive { background: var(--color-text-faint); }
+    .device-sheet-name {
+      flex: 1;
+      font-size: var(--text-base);
+      font-weight: 700;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .device-sheet-status {
+      font-size: var(--text-xs);
+      color: var(--color-text-faint);
+    }
+
+    .device-sheet-key-label {
+      font-size: var(--text-xs);
+      color: var(--color-text-muted);
+      margin-bottom: var(--space-2);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
 
     .input-field {
       width: 100%;
@@ -126,7 +164,6 @@
       margin-top: var(--space-1);
     }
 
-    /* ---- Серебристая кнопка инструкции ---- */
     .btn-instruction {
       width: 100%;
       display: flex;
@@ -147,36 +184,13 @@
         rgba(210,214,228,0.20) 70%,
         rgba(240,240,248,0.12) 100%
       );
-      background-size: 200% 200%;
       color: var(--color-text-muted);
       position: relative;
       overflow: hidden;
       transition: all 180ms cubic-bezier(0.16,1,0.3,1);
       -webkit-tap-highlight-color: transparent;
     }
-    .btn-instruction::before {
-      content: '';
-      position: absolute;
-      inset: 0;
-      background: linear-gradient(
-        105deg,
-        transparent 20%,
-        rgba(255,255,255,0.18) 50%,
-        transparent 80%
-      );
-      background-size: 200% 100%;
-      background-position: -100% 0;
-      transition: background-position 0.5s ease;
-      pointer-events: none;
-    }
-    .btn-instruction:hover::before,
-    .btn-instruction:focus-visible::before {
-      background-position: 150% 0;
-    }
-    .btn-instruction:active {
-      opacity: 0.75;
-      transform: scale(0.98);
-    }
+    .btn-instruction:active { opacity: 0.75; transform: scale(0.98); }
   </style>
 </head>
 <body>
@@ -201,9 +215,7 @@
           <div class="balance-amount" id="balance-amount">—</div>
           <div class="balance-sub" id="balance-sub">—</div>
         </div>
-        <button class="btn btn-primary" onclick="openTopup()" style="flex-shrink:0;">
-          Пополнить
-        </button>
+        <button class="btn btn-primary" onclick="openTopup()" style="flex-shrink:0;">Пополнить</button>
       </div>
     </div>
 
@@ -231,12 +243,10 @@
     <!-- VPN-ключ -->
     <div class="card" style="margin-bottom:var(--space-4);">
       <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:var(--space-3);">
-        <!-- левая часть: заголовок + подпись стопкой -->
         <div style="display:flex; flex-direction:column; gap:var(--space-1); min-width:0;">
           <div class="card-title">Ключ аккаунта</div>
           <div style="font-size:var(--text-xs); color:var(--color-text-faint);">Общий ключ, не связан с устройствами</div>
         </div>
-        <!-- правая часть: кнопка -->
         <button class="btn btn-ghost" id="btn-rotate" onclick="rotateKey()" style="flex-shrink:0; padding:var(--space-2) var(--space-3); font-size:var(--text-xs); gap:var(--space-2);">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
@@ -256,7 +266,7 @@
       </div>
     </div>
 
-    <!-- Инструкция — перенесена выше устройств -->
+    <!-- Инструкция -->
     <button class="btn-instruction" style="margin-bottom:var(--space-4);" onclick="openInstruction()">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
         <circle cx="12" cy="12" r="10"/>
@@ -308,7 +318,74 @@
     </a>
   </nav>
 
-  <!-- Modal: удалить устройство -->
+  <!-- ======================================================
+       Modal: шторка устройства (детали + ротация + удаление)
+       ====================================================== -->
+  <div class="modal-overlay" id="modal-device">
+    <div class="modal-sheet">
+
+      <!-- Заголовок: имя + статус -->
+      <div class="device-sheet-header">
+        <div class="device-sheet-dot" id="ds-dot"></div>
+        <div style="flex:1; min-width:0;">
+          <div class="device-sheet-name" id="ds-name">—</div>
+          <div class="device-sheet-status" id="ds-status">—</div>
+        </div>
+        <button
+          onclick="closeModal('modal-device')"
+          style="flex-shrink:0; padding:var(--space-2); color:var(--color-text-faint);"
+          aria-label="Закрыть"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- VLESS-ключ устройства -->
+      <div id="ds-key-section" style="margin-bottom:var(--space-5);">
+        <div class="device-sheet-key-label">VLESS-ключ</div>
+        <div class="key-block">
+          <span class="key-text" id="ds-key-text">—</span>
+          <button class="copy-btn" onclick="copyDeviceSheetKey()" aria-label="Скопировать ключ">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="9" y="9" width="13" height="13" rx="2"/>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Действия -->
+      <div class="modal-actions">
+        <!-- Ротировать ключ — только для активных -->
+        <button
+          class="btn btn-primary btn-full"
+          id="btn-ds-rotate"
+          onclick="doRotateDevice()"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+          </svg>
+          Обновить ключ
+        </button>
+        <!-- Удалить устройство -->
+        <button
+          class="btn btn-danger btn-full"
+          id="btn-ds-delete"
+          onclick="doDeleteDevice()"
+        >
+          Удалить устройство
+        </button>
+        <!-- Закрыть -->
+        <button class="btn btn-ghost btn-full" onclick="closeModal('modal-device')">Отмена</button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Modal: подтверждение удаления -->
   <div class="modal-overlay" id="modal-delete">
     <div class="modal-sheet">
       <div class="modal-title" id="modal-delete-title">Удалить устройство?</div>
@@ -333,12 +410,12 @@
     </div>
   </div>
 
-  <!-- Modal: новый ключ устройства -->
+  <!-- Modal: новый ключ устройства после ротации -->
   <div class="modal-overlay" id="modal-new-key">
     <div class="modal-sheet">
-      <div class="modal-title">Ключ обновлён</div>
-      <div class="modal-desc">Новый VLESS ключ для устройства:</div>
-      <div class="key-block" style="margin-bottom:var(--space-4);">
+      <div class="modal-title">Ключ обновлён ✅</div>
+      <div class="modal-desc">Новый VLESS-ключ для устройства. Вставьте его в приложение.</div>
+      <div class="key-block" style="margin-bottom:var(--space-5);">
         <span class="key-text" id="modal-new-key-text"></span>
         <button class="copy-btn" onclick="copyModalKey()" aria-label="Скопировать ключ">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -348,6 +425,7 @@
         </button>
       </div>
       <div class="modal-actions">
+        <button class="btn btn-primary btn-full" onclick="copyModalKey()">Скопировать</button>
         <button class="btn btn-ghost btn-full" onclick="closeModal('modal-new-key')">Закрыть</button>
       </div>
     </div>
@@ -366,9 +444,10 @@
     const params = new URLSearchParams(window.location.search);
     const USER_ID = tgUser?.id ?? (params.get('uid') ? parseInt(params.get('uid')) : null);
 
-    let _vlessKey = '';
-    let _devices  = [];
-    let _deleteId = null;
+    let _vlessKey  = '';
+    let _devices   = [];
+    // Текущее открытое устройство в шторке
+    let _activeDevice = null;
 
     if (tgUser) {
       const fullName = [tgUser.first_name, tgUser.last_name].filter(Boolean).join(' ');
@@ -378,6 +457,9 @@
     }
     if (USER_ID) document.getElementById('user-tg-id').textContent = USER_ID;
 
+    // ------------------------------------------------------------------
+    // Загрузка профиля
+    // ------------------------------------------------------------------
     async function loadProfile() {
       if (!USER_ID) { showError('Откройте приложение через Telegram'); return; }
       try {
@@ -400,7 +482,7 @@
 
       const statusMap = {
         ACTIVE:   { label: '✅ Активна',   cls: 'badge-success' },
-        TRIAL:    { label: '🕓 Trial',      cls: 'badge-warning' },
+        TRIAL:    { label: '🔓 Trial',      cls: 'badge-warning' },
         INACTIVE: { label: '⛔ Отключена', cls: 'badge-error'   },
         EXPIRED:  { label: '❌ Истекла',   cls: 'badge-error'   },
       };
@@ -426,6 +508,9 @@
       renderDevices(_devices);
     }
 
+    // ------------------------------------------------------------------
+    // Рендер списка устройств
+    // ------------------------------------------------------------------
     function renderDevices(devices) {
       const list = document.getElementById('devices-list');
       if (!devices.length) {
@@ -433,27 +518,125 @@
         return;
       }
       list.innerHTML = devices.map(dev => `
-        <div class="device-item" onclick="openDeleteDevice(${dev.id}, '${escHtml(dev.device_name)}')">
+        <div class="device-item" onclick="openDeviceSheet(${dev.id})">
           <div class="device-dot ${dev.is_active ? 'active' : 'inactive'}"></div>
           <span class="device-name">${escHtml(dev.device_name)}</span>
           <span class="device-cost">${parseFloat(dev.monthly_cost ?? 0).toFixed(2)} ₽/мес</span>
-          ${dev.is_active ? `
-            <button
-              class="btn btn-ghost"
-              onclick="event.stopPropagation(); rotateDeviceKey(${dev.id})"
-              style="padding:var(--space-1) var(--space-2); font-size:var(--text-xs); gap:var(--space-1); flex-shrink:0;"
-              id="btn-rotate-dev-${dev.id}"
-              title="Обновить ключ"
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
-                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-              </svg>
-            </button>` : ''}
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--color-text-faint); flex-shrink:0;"><polyline points="9 18 15 12 9 6"/></svg>
         </div>`).join('');
     }
 
+    // ------------------------------------------------------------------
+    // Шторка устройства
+    // ------------------------------------------------------------------
+    window.openDeviceSheet = function(deviceId) {
+      const dev = _devices.find(d => d.id === deviceId);
+      if (!dev) return;
+      _activeDevice = dev;
+
+      // Шапка
+      const dot = document.getElementById('ds-dot');
+      dot.className = `device-sheet-dot ${dev.is_active ? 'active' : 'inactive'}`;
+      document.getElementById('ds-name').textContent   = dev.device_name;
+      document.getElementById('ds-status').textContent = dev.is_active ? 'Активно' : 'Отключено';
+
+      // Ключ — берём из данных устройства если есть, иначе прячем
+      const keySection = document.getElementById('ds-key-section');
+      const keyText    = document.getElementById('ds-key-text');
+      if (dev.vless_link) {
+        keyText.textContent = dev.vless_link;
+        keySection.style.display = '';
+      } else {
+        keySection.style.display = 'none';
+      }
+
+      // Кнопка ротации — только для активных
+      const btnRotate = document.getElementById('btn-ds-rotate');
+      btnRotate.disabled = !dev.is_active;
+      btnRotate.style.opacity = dev.is_active ? '1' : '0.4';
+      btnRotate.innerHTML = `
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+        </svg>
+        Обновить ключ`;
+
+      openModal('modal-device');
+    };
+
+    // Копировать ключ из шторки устройства
+    window.copyDeviceSheetKey = function() {
+      const text = document.getElementById('ds-key-text').textContent;
+      if (!text || text === '—') return;
+      navigator.clipboard.writeText(text).then(() => showToast('✅ Ключ скопирован'));
+    };
+
+    // ------------------------------------------------------------------
+    // Ротация ключа устройства
+    // ------------------------------------------------------------------
+    window.doRotateDevice = async function() {
+      if (!USER_ID || !_activeDevice) return;
+      const btn = document.getElementById('btn-ds-rotate');
+      btn.disabled = true;
+      btn.innerHTML = `<div class="spinner" style="width:14px;height:14px;"></div> Обновляем...`;
+
+      try {
+        const res = await apiRotateDeviceKey(USER_ID, _activeDevice.id);
+        // Обновляем локальный объект устройства
+        _activeDevice.vless_link = res.vless_link;
+        // Показываем ключ прямо в шторке
+        document.getElementById('ds-key-text').textContent = res.vless_link;
+        document.getElementById('ds-key-section').style.display = '';
+        // Показываем модалку с новым ключом
+        openKeyModal(res.vless_link);
+        showToast('✅ Ключ устройства обновлён');
+        // Обновляем список в фоне
+        await loadProfile();
+      } catch (e) {
+        showToast('❌ Ошибка обновления ключа');
+        btn.disabled = false;
+        btn.innerHTML = `
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+          </svg>
+          Обновить ключ`;
+      }
+    };
+
+    // ------------------------------------------------------------------
+    // Удаление устройства (через шторку)
+    // ------------------------------------------------------------------
+    window.doDeleteDevice = function() {
+      if (!_activeDevice) return;
+      closeModal('modal-device');
+      const name = _activeDevice.device_name;
+      document.getElementById('modal-delete-title').textContent = `Удалить «${name}»?`;
+      document.getElementById('btn-confirm-delete').onclick = () => confirmDeleteDevice(_activeDevice.id);
+      openModal('modal-delete');
+    };
+
+    async function confirmDeleteDevice(id) {
+      const btn = document.getElementById('btn-confirm-delete');
+      btn.disabled = true;
+      btn.innerHTML = `<div class="spinner"></div> Удаляем...`;
+      try {
+        const res = await fetch(`/api/user/${USER_ID}/devices/${id}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error(res.status);
+        closeModal('modal-delete');
+        showToast('✅ Устройство удалено');
+        await loadProfile();
+      } catch (e) {
+        showToast('❌ Ошибка удаления');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Удалить';
+      }
+    }
+
+    // ------------------------------------------------------------------
+    // Ротация основного ключа аккаунта
+    // ------------------------------------------------------------------
     window.rotateKey = async function() {
       if (!USER_ID) return;
       const btn = document.getElementById('btn-rotate');
@@ -472,58 +655,9 @@
       }
     };
 
-    window.rotateDeviceKey = async function(deviceId) {
-      if (!USER_ID) return;
-      const btn = document.getElementById(`btn-rotate-dev-${deviceId}`);
-      if (btn) {
-        btn.disabled = true;
-        btn.innerHTML = `<div class="spinner" style="width:12px;height:12px;"></div>`;
-      }
-      try {
-        const res = await apiRotateDeviceKey(USER_ID, deviceId);
-        showToast('✅ Ключ устройства обновлён');
-        openKeyModal(res.vless_link);
-        await loadProfile();
-      } catch (e) {
-        showToast('❌ Ошибка обновления ключа устройства');
-      }
-    };
-
-    window.copyModalKey = function() {
-      const text = document.getElementById('modal-new-key-text').textContent;
-      if (!text) return;
-      navigator.clipboard.writeText(text).then(() => showToast('✅ Ключ скопирован'));
-    };
-
-    window.copyKey = function() {
-      if (!_vlessKey) return;
-      navigator.clipboard.writeText(_vlessKey).then(() => {
-        const btn = document.getElementById('btn-copy-key');
-        btn.classList.add('copied');
-        showToast('✅ Ключ скопирован');
-        setTimeout(() => btn.classList.remove('copied'), 2000);
-      });
-    };
-
-    window.openTopup = function() { if (tg) tg.close(); };
-
-    window.openInstruction = function() {
-      if (tg) {
-        tg.showPopup({
-          title: 'Подключение VPN',
-          message: '1. Установите V2RayTun или Hiddify\n2. Скопируйте ключ выше\n3. Вставьте в приложение\n4. Подключитесь',
-          buttons: [{ type: 'ok', text: 'Понятно' }]
-        });
-      }
-    };
-
-    window.openDeleteDevice = function(id, name) {
-      _deleteId = id;
-      document.getElementById('modal-delete-title').textContent = `Удалить «${name}»?`;
-      document.getElementById('btn-confirm-delete').onclick = () => confirmDeleteDevice(id);
-      openModal('modal-delete');
-    };
-
+    // ------------------------------------------------------------------
+    // Добавить устройство
+    // ------------------------------------------------------------------
     window.openAddDevice = function() {
       document.getElementById('input-device-name').value = '';
       openModal('modal-add');
@@ -553,34 +687,51 @@
       }
     };
 
-    async function confirmDeleteDevice(id) {
-      const btn = document.getElementById('btn-confirm-delete');
-      btn.disabled = true;
-      btn.innerHTML = `<div class="spinner"></div> Удаляем...`;
-      try {
-        const res = await fetch(`/api/user/${USER_ID}/devices/${id}`, { method: 'DELETE' });
-        if (!res.ok) throw new Error(res.status);
-        closeModal('modal-delete');
-        showToast('✅ Устройство удалено');
-        await loadProfile();
-      } catch (e) {
-        showToast('❌ Ошибка удаления');
-      } finally {
-        btn.disabled = false;
-        btn.textContent = 'Удалить';
-      }
-    }
+    // ------------------------------------------------------------------
+    // Копировать основной ключ
+    // ------------------------------------------------------------------
+    window.copyKey = function() {
+      if (!_vlessKey) return;
+      navigator.clipboard.writeText(_vlessKey).then(() => {
+        const btn = document.getElementById('btn-copy-key');
+        btn.classList.add('copied');
+        showToast('✅ Ключ скопирован');
+        setTimeout(() => btn.classList.remove('copied'), 2000);
+      });
+    };
 
-    function openModal(id) {
-      document.getElementById(id).classList.add('open');
-      document.body.style.overflow = 'hidden';
-    }
-
+    // ------------------------------------------------------------------
+    // Модалка с новым ключом после ротации
+    // ------------------------------------------------------------------
     function openKeyModal(link) {
       document.getElementById('modal-new-key-text').textContent = link;
       openModal('modal-new-key');
     }
 
+    window.copyModalKey = function() {
+      const text = document.getElementById('modal-new-key-text').textContent;
+      if (!text) return;
+      navigator.clipboard.writeText(text).then(() => showToast('✅ Ключ скопирован'));
+    };
+
+    // ------------------------------------------------------------------
+    // Разное
+    // ------------------------------------------------------------------
+    window.openTopup    = function() { if (tg) tg.close(); };
+    window.openInstruction = function() {
+      if (tg) {
+        tg.showPopup({
+          title: 'Подключение VPN',
+          message: '1. Установите V2RayTun или Hiddify\n2. Скопируйте ключ выше\n3. Вставьте в приложение\n4. Подключитесь',
+          buttons: [{ type: 'ok', text: 'Понятно' }]
+        });
+      }
+    };
+
+    function openModal(id) {
+      document.getElementById(id).classList.add('open');
+      document.body.style.overflow = 'hidden';
+    }
     window.closeModal = function(id) {
       document.getElementById(id).classList.remove('open');
       document.body.style.overflow = '';
@@ -601,7 +752,9 @@
     }
     function showError(msg) { showToast('⚠️ ' + msg); }
     function escHtml(s) {
-      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+      return String(s)
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
 
     loadProfile();
