@@ -10,14 +10,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 from app.bot.dispatcher import dp
-from app.config import ADMIN_ID, DEVICE_MONTHLY_COST, TZ_MSK, TZ_NSK
-
-from app.db import (
-    get_user_data_dict as get_user,
-    get_user_devices,
-    add_device,
-    remove_device as delete_device,
-)
+from app.config import ADMIN_ID, DEVICE_MONTHLY_COST, TZ_MSK, TZ_NSK, WEBAPP_URL
 
 from app.db import (
     get_user_data_dict as get_user,
@@ -30,9 +23,7 @@ from app.db import (
 from app.services.vpn import (
     add_device_to_panel,
     remove_device_from_panel,
-    rotate_user_key,
 )
-from app.core.vless import build_vless_link
 from app.bot import keyboards
 
 logger = logging.getLogger(__name__)
@@ -69,17 +60,13 @@ async def _get_or_warn(message: types.Message, user_id: int):
     return user
 
 
-@dp.message(F.text == "👤 Профиль")
-async def cmd_profile(message: types.Message):
-    user_id = message.from_user.id
-    user = await _get_or_warn(message, user_id)
-    if not user:
-        return
-    devices = await get_user_devices(user_id)
+def _profile_text(user: dict, devices: list, user_id: int) -> str:
     days = _days_left(user.get("expires_at"))
     days_str = f"{days} дн." if days is not None else "—"
-    status_emoji = {"ACTIVE": "✅", "TRIAL": "🌟", "INACTIVE": "❌", "BANNED": "🚫"}.get(user.get("status", ""), "❓")
-    text = (
+    status_emoji = {"ACTIVE": "✅", "TRIAL": "🌟", "INACTIVE": "❌", "BANNED": "🚫"}.get(
+        user.get("status", ""), "❓"
+    )
+    return (
         f"<b>👤 Профиль</b>\n\n"
         f"ID: <code>{user_id}</code>\n"
         f"Статус: {status_emoji} {user.get('status', '?')}\n"
@@ -87,7 +74,21 @@ async def cmd_profile(message: types.Message):
         f"До конца подписки: <b>{days_str}</b>\n"
         f"Устройств: <b>{len(devices)}/{MAX_DEVICES}</b>\n"
     )
-    await message.answer(text, parse_mode="HTML", reply_markup=keyboards.build_devices_keyboard(devices))
+
+
+@dp.message(F.text == "👤 Профиль")
+async def cmd_profile(message: types.Message):
+    """Оставляем обратную совместимость для старых reply-кнопок."""
+    user_id = message.from_user.id
+    user = await _get_or_warn(message, user_id)
+    if not user:
+        return
+    devices = await get_user_devices(user_id)
+    await message.answer(
+        _profile_text(user, devices, user_id),
+        parse_mode="HTML",
+        reply_markup=keyboards.webapp_button(WEBAPP_URL, user_id),
+    )
 
 
 @dp.callback_query(F.data == "devices_list")
@@ -115,7 +116,11 @@ async def cb_device_detail(callback: types.CallbackQuery):
         f"<b>📱 {html.escape(device['device_name'])}</b>\n\n"
         f"VLESS ключ:\n<code>{html.escape(vless)}</code>"
     )
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=keyboards.build_device_detail_keyboard(device_id))
+    await callback.message.edit_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=keyboards.build_device_detail_keyboard(device_id),
+    )
     await callback.answer()
 
 
@@ -154,8 +159,11 @@ async def process_device_name(message: types.Message, state: FSMContext):
         return
     await add_device(user_id, device_name, client_uuid, vless_link)
     await message.answer(
-        f"✅ Устройство <b>{html.escape(device_name)}</b> добавлено!\n\nVLESS ключ:\n<code>{html.escape(vless_link)}</code>",
+        f"✅ Устройство <b>{html.escape(device_name)}</b> добавлено!\n\n"
+        f"VLESS ключ:\n<code>{html.escape(vless_link)}</code>\n\n"
+        "Для управления устройствами используйте личный кабинет 👇",
         parse_mode="HTML",
+        reply_markup=keyboards.webapp_button(WEBAPP_URL, user_id),
     )
 
 
@@ -187,11 +195,11 @@ async def cb_delete_device(callback: types.CallbackQuery):
         if not ok:
             logger.warning("delete_device.panel_warn device_id=%s err=%s", device_id, err)
     await delete_device(device_id)
-    devices = await get_user_devices(callback.from_user.id)
     await callback.message.edit_text(
-        f"✅ Устройство <b>{html.escape(device['device_name'])}</b> удалено.",
+        f"✅ Устройство <b>{html.escape(device['device_name'])}</b> удалено.\n\n"
+        "Для управления устройствами используйте личный кабинет 👇",
         parse_mode="HTML",
-        reply_markup=keyboards.build_devices_keyboard(devices),
+        reply_markup=keyboards.webapp_button(WEBAPP_URL, callback.from_user.id),
     )
     await callback.answer()
 
@@ -202,18 +210,10 @@ async def cb_back(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     user = await get_user(user_id)
     devices = await get_user_devices(user_id)
-    days = _days_left(user.get("expires_at")) if user else None
-    days_str = f"{days} дн." if days is not None else "—"
-    status_emoji = {"ACTIVE": "✅", "TRIAL": "🌟", "INACTIVE": "❌", "BANNED": "🚫"}.get(
-        user.get("status", "") if user else "", "❓"
+    text = _profile_text(user, devices, user_id) if user else "❌ Пользователь не найден."
+    await callback.message.edit_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=keyboards.webapp_button(WEBAPP_URL, user_id),
     )
-    text = (
-        f"<b>👤 Профиль</b>\n\n"
-        f"ID: <code>{user_id}</code>\n"
-        f"Статус: {status_emoji} {user.get('status', '?') if user else '?'}\n"
-        f"Баланс: <b>{_fmt_balance(user.get('balance', 0) if user else 0)} ₽</b>\n"
-        f"До конца подписки: <b>{days_str}</b>\n"
-        f"Устройств: <b>{len(devices)}/{MAX_DEVICES}</b>\n"
-    )
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=keyboards.build_devices_keyboard(devices))
     await callback.answer()

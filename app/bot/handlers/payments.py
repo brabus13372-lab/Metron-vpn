@@ -7,7 +7,8 @@ from aiogram.types import LabeledPrice
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.bot.dispatcher import dp
-from app.config import ADMIN_ID, PAY_TOKEN, PAYMENT_AMOUNTS
+from app.bot.keyboards import webapp_button
+from app.config import ADMIN_ID, PAY_TOKEN, PAYMENT_AMOUNTS, WEBAPP_URL
 from app.db import (
     activate_device,
     add_balance_atomic,
@@ -24,6 +25,7 @@ from app.services.vpn import (
 )
 
 logger = logging.getLogger(__name__)
+
 
 async def _safe_alert_admin(bot: Bot, text: str) -> None:
     if not ADMIN_ID:
@@ -55,17 +57,15 @@ def _validate_payment(payment: types.SuccessfulPayment, user_id: int) -> bool:
     except ValueError:
         return False
 
-    # Сумма в payload должна совпадать с реально уплаченной
     if payment.total_amount != expected_amount:
         return False
 
-    # Сумма должна быть из списка допустимых
     try:
         from app.config import PAYMENT_AMOUNTS
         if payment.total_amount not in PAYMENT_AMOUNTS:
             return False
     except ImportError:
-        pass  # Если PAYMENT_AMOUNTS не задан — не валидируем список
+        pass
 
     return True
 
@@ -162,9 +162,6 @@ async def send_invoice(call: types.CallbackQuery, bot: Bot) -> None:
 
 @dp.pre_checkout_query(F.invoice_payload.startswith("vpn_pay_"))
 async def pre_checkout(q: types.PreCheckoutQuery, bot: Bot) -> None:
-    """
-    Проверяем payload: извлекаем amount из него и сверяем с q.total_amount.
-    """
     try:
         parts = q.invoice_payload.split("_", 4)
         expected_amount = int(parts[4])
@@ -223,7 +220,6 @@ async def success_payment(message: types.Message, bot: Bot) -> None:
             provider_charge_id=payment.provider_payment_charge_id,
             amount_cents=amount_cents,
         )
-
         if not payment_result["created"]:
             logger.warning(
                 "Duplicate payment ignored user=%s provider_charge_id=%s",
@@ -231,7 +227,6 @@ async def success_payment(message: types.Message, bot: Bot) -> None:
                 payment.provider_payment_charge_id,
             )
             return
-
     except Exception as e:
         logger.exception("Failed to save payment user=%s", user_id)
         await _safe_alert_admin(bot, f"🚨 PAYMENT SAVE FAIL {html.escape(str(e))}")
@@ -250,7 +245,6 @@ async def success_payment(message: types.Message, bot: Bot) -> None:
             logger.error("User not found during balance top-up user=%s", user_id)
             await _safe_alert_admin(bot, f"🚨 USER NOT FOUND {user_id}")
             return
-
     except Exception as e:
         logger.exception("Balance update failed user=%s", user_id)
         await _safe_alert_admin(bot, f"🚨 DB ERROR {html.escape(str(e))}")
@@ -283,7 +277,6 @@ async def success_payment(message: types.Message, bot: Bot) -> None:
             )
             if not vless_link or not uuid:
                 raise RuntimeError(err or "create_panel_client returned empty result")
-
             await save_paid_access(
                 user_id=user_id,
                 username=username,
@@ -291,9 +284,7 @@ async def success_payment(message: types.Message, bot: Bot) -> None:
                 uuid_val=uuid,
             )
         elif current_status not in ("ACTIVE", "TRIAL"):
-            # Ключ есть, но статус не активный — просто меняем статус
             await update_user_status(user_id, "ACTIVE")
-
     except Exception as e:
         logger.exception("VPN/user sync failed user=%s", user_id)
         await _safe_alert_admin(
@@ -309,28 +300,19 @@ async def success_payment(message: types.Message, bot: Bot) -> None:
     # 6. Активируем устройства в панели
     await _execute_activation(user_id, bot)
 
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        types.InlineKeyboardButton(text="📖 Инструкция", callback_data="show_instruction")
-    )
-    builder.row(
-        types.InlineKeyboardButton(text="📱 Мои устройства", callback_data="manage_devices")
-    )
-
+    # 7. Отправляем подтверждение — только WebApp кнопка
     await message.answer(
         "🎉 <b>Оплата прошла успешно!</b>\n"
         f"<b>💰 Баланс:</b> {new_balance:.2f} ₽\n"
-        "Доступ активирован.",
+        "Доступ активирован. Откройте личный кабинет для управления устройствами:",
         parse_mode="HTML",
-        reply_markup=builder.as_markup(),
+        reply_markup=webapp_button(WEBAPP_URL, user_id),
         disable_web_page_preview=True,
     )
 
     logger.info(
         "PAYMENT SUCCESS user=%s amount_cents=%s balance=%s",
-        user_id,
-        amount_cents,
-        new_balance,
+        user_id, amount_cents, new_balance,
     )
 
     await _safe_alert_admin(
