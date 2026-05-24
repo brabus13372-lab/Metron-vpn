@@ -785,6 +785,30 @@ class Database:
                 for r in rows
             ]
 
+    async def get_device_by_id(self, device_id: int) -> Optional[Dict[str, Any]]:
+        async with self.connection() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT
+                    id,
+                    user_id,
+                    device_name,
+                    client_uuid,
+                    vless_link,
+                    monthly_cost,
+                    created_at,
+                    is_active,
+                    disabled_at,
+                    disabled_reason
+                FROM devices
+                WHERE id = $1
+                """,
+                device_id,
+            )
+            if not row:
+                return None
+            return {**dict(row), "monthly_cost": self._cents_to_rubles(row["monthly_cost"])}
+
     async def get_all_users_with_devices(self) -> List[int]:
         async with self.connection() as conn:
             rows = await conn.fetch(
@@ -1064,6 +1088,9 @@ async def set_user_balance(user_id: int, amount_cents: int) -> bool:
 
 async def get_user_devices(user_id: int) -> List[Dict[str, Any]]:
     return await get_db().get_user_devices(user_id)
+
+async def get_device_by_id(device_id: int) -> Optional[Dict[str, Any]]:
+    return await get_db().get_device_by_id(device_id)
 
 async def get_all_users_with_devices() -> List[int]:
     return await get_db().get_all_users_with_devices()
