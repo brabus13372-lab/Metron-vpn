@@ -31,6 +31,7 @@ from app.db import (
     update_device_link,
 )
 from app.services.vpn import rotate_user_key, add_device_to_panel, rotate_client_uuid
+from app.config import BOT_NAME
 
 
 @asynccontextmanager
@@ -92,6 +93,16 @@ async def _get_user_or_404(user_id: int) -> dict:
 @app.get("/health", response_model=HealthResponse, tags=["system"])
 async def health():
     return HealthResponse()
+
+
+# ---------------------------------------------------------------------------
+# Config (публичный, без авторизации)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/config", tags=["system"])
+async def get_config():
+    """Публичные настройки для фронтенда."""
+    return {"bot_name": BOT_NAME or ""}
 
 
 # ---------------------------------------------------------------------------

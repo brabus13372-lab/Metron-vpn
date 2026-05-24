@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Union
 
 from aiogram import F, types
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import WebAppInfo, InlineKeyboardButton, InlineKeyboardMarkup
 from app.config import SERVER_IP
@@ -32,7 +32,7 @@ async def send_dynamic_instruction(
     vless_link = user.get("vless_link") if user else None
 
     if not vless_link:
-        msg = "<b>⚠️ У вас ещё нет ключа.</b>\nНажмите «🚀 Подключить VPN», чтобы получить доступ."
+        msg = "<b>\u26a0\ufe0f \u0423 \u0432\u0430\u0441 \u0435\u0449\u0451 \u043d\u0435\u0442 \u043a\u043b\u044e\u0447\u0430.</b>\n\u041d\u0430\u0436\u043c\u0438\u0442\u0435 \u00ab\ud83d\ude80 \u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c VPN\u00bb, \u0447\u0442\u043e\u0431\u044b \u043f\u043e\u043b\u0443\u0447\u0438\u0442\u044c \u0434\u043e\u0441\u0442\u0443\u043f."
         if isinstance(target, types.CallbackQuery):
             await target.message.answer(msg, parse_mode="HTML")
             await target.answer()
@@ -42,45 +42,37 @@ async def send_dynamic_instruction(
 
     safe_link = html.escape(vless_link)
     text = (
-        "<b>📖 ИНСТРУКЦИЯ ПО ПОДКЛЮЧЕНИЮ</b>\n"
-        "――――――――――――――――――――\n\n"
-
-        "<b>🔑 ШАГ 1 — Скопируйте ваш ключ:</b>\n"
+        "<b>\ud83d\udcd6 \u0418\u041d\u0421\u0422\u0420\u0423\u041a\u0426\u0418\u042f \u041f\u041e \u041f\u041e\u0414\u041a\u041b\u042e\u0427\u0415\u041d\u0418\u042e</b>\n"
+        "\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\n\n"
+        "<b>\ud83d\udd11 \u0428\u0410\u0413 1 \u2014 \u0421\u043a\u043e\u043f\u0438\u0440\u0443\u0439\u0442\u0435 \u0432\u0430\u0448 \u043a\u043b\u044e\u0447:</b>\n"
         f"<code>{safe_link}</code>\n"
-        "<i>↗️ Нажмите на ключ — он скопируется автоматически.</i>\n\n"
-
-        "――――――――――――――――――――\n"
-        "<b>📲 ШАГ 2 — Установите приложение:</b>\n\n"
-
-        "💙 <b>iPhone / iPad (iOS):</b>\n"
-        "Откройте App Store и скачайте <b>v2RayTun</b>\n\n"
-
-        "💚 <b>Android:</b>\n"
-        "Откройте Google Play и скачайте: <a href='https://play.google.com/store/apps/details?id=com.v2raytun.android'>v2RayTun</a>\n\n"
-
-        "🖥 <b>Windows / macOS / Linux:</b>\n"
-        "Скачайте с официального сайта: <a href='https://v2raytun.com'>v2raytun.com</a>\n"
-        "Выберите вашу операционную систему и скачайте установщик.\n\n"
-
-        "――――――――――――――――――――\n"
-        "<b>⚙️ ШАГ 3 — Добавьте ключ в приложение:</b>\n\n"
-        "1. Откройте v2RayTun\n"
-        "2. Нажмите кнопку <b>[ + ]</b> в правом верхнем углу\n"
-        "3. Выберите <b>« Import from Clipboard »</b>\n"
-        "4. Ключ автоматически вставится — нажмите <b>« Save »</b>\n\n"
-
-        "――――――――――――――――――――\n"
-        "<b>🟢 ШАГ 4 — Включите VPN:</b>\n\n"
-        "1. Выберите сохранённый конфиг (MetronVPN)\n"
-        "2. Нажмите большую кнопку подключения посередине экрана\n"
-        "3. При первом запуске iOS/Android запросит разрешение — нажмите <b>« Allow »</b>\n"
-        "4. В статусной строке появится значок «<b>VPN</b>» — всё работает! 🎉\n\n"
-
-        "――――――――――――――――――――\n"
-        "<b>🔄 Если не работает:</b>\n"
-        "• Проверьте баланс в «👤 Мой профиль»\n"
-        "• Попробуйте переподключиться (выключить и включить)\n"
-        "• Если не помогло — напишите в поддержку, я отвечу лично 🙌"
+        "<i>\u2197\ufe0f \u041d\u0430\u0436\u043c\u0438\u0442\u0435 \u043d\u0430 \u043a\u043b\u044e\u0447 \u2014 \u043e\u043d \u0441\u043a\u043e\u043f\u0438\u0440\u0443\u0435\u0442\u0441\u044f \u0430\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u0435\u0441\u043a\u0438.</i>\n\n"
+        "\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\n"
+        "<b>\ud83d\udcf2 \u0428\u0410\u0413 2 \u2014 \u0423\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u0435 \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435:</b>\n\n"
+        "\ud83d\udc99 <b>iPhone / iPad (iOS):</b>\n"
+        "\u041e\u0442\u043a\u0440\u043e\u0439\u0442\u0435 App Store \u0438 \u0441\u043a\u0430\u0447\u0430\u0439\u0442\u0435 <b>v2RayTun</b>\n\n"
+        "\ud83d\udc9a <b>Android:</b>\n"
+        "\u041e\u0442\u043a\u0440\u043e\u0439\u0442\u0435 Google Play \u0438 \u0441\u043a\u0430\u0447\u0430\u0439\u0442\u0435: <a href='https://play.google.com/store/apps/details?id=com.v2raytun.android'>v2RayTun</a>\n\n"
+        "\ud83d\udda5 <b>Windows / macOS / Linux:</b>\n"
+        "\u0421\u043a\u0430\u0447\u0430\u0439\u0442\u0435 \u0441 \u043e\u0444\u0438\u0446\u0438\u0430\u043b\u044c\u043d\u043e\u0433\u043e \u0441\u0430\u0439\u0442\u0430: <a href='https://v2raytun.com'>v2raytun.com</a>\n"
+        "\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0432\u0430\u0448\u0443 \u043e\u043f\u0435\u0440\u0430\u0446\u0438\u043e\u043d\u043d\u0443\u044e \u0441\u0438\u0441\u0442\u0435\u043c\u0443 \u0438 \u0441\u043a\u0430\u0447\u0430\u0439\u0442\u0435 \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u0449\u0438\u043a.\n\n"
+        "\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\n"
+        "<b>\u2699\ufe0f \u0428\u0410\u0413 3 \u2014 \u0414\u043e\u0431\u0430\u0432\u044c\u0442\u0435 \u043a\u043b\u044e\u0447 \u0432 \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435:</b>\n\n"
+        "1. \u041e\u0442\u043a\u0440\u043e\u0439\u0442\u0435 v2RayTun\n"
+        "2. \u041d\u0430\u0436\u043c\u0438\u0442\u0435 \u043a\u043d\u043e\u043f\u043a\u0443 <b>[ + ]</b> \u0432 \u043f\u0440\u0430\u0432\u043e\u043c \u0432\u0435\u0440\u0445\u043d\u0435\u043c \u0443\u0433\u043b\u0443\n"
+        "3. \u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 <b>\u00ab Import from Clipboard \u00bb</b>\n"
+        "4. \u041a\u043b\u044e\u0447 \u0430\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u0435\u0441\u043a\u0438 \u0432\u0441\u0442\u0430\u0432\u0438\u0442\u0441\u044f \u2014 \u043d\u0430\u0436\u043c\u0438\u0442\u0435 <b>\u00ab Save \u00bb</b>\n\n"
+        "\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\n"
+        "<b>\ud83d\udfe2 \u0428\u0410\u0413 4 \u2014 \u0412\u043a\u043b\u044e\u0447\u0438\u0442\u0435 VPN:</b>\n\n"
+        "1. \u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0441\u043e\u0445\u0440\u0430\u043d\u0451\u043d\u043d\u044b\u0439 \u043a\u043e\u043d\u0444\u0438\u0433 (MetronVPN)\n"
+        "2. \u041d\u0430\u0436\u043c\u0438\u0442\u0435 \u0431\u043e\u043b\u044c\u0448\u0443\u044e \u043a\u043d\u043e\u043f\u043a\u0443 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u044f \u043f\u043e\u0441\u0435\u0440\u0435\u0434\u0438\u043d\u0435 \u044d\u043a\u0440\u0430\u043d\u0430\n"
+        "3. \u041f\u0440\u0438 \u043f\u0435\u0440\u0432\u043e\u043c \u0437\u0430\u043f\u0443\u0441\u043a\u0435 iOS/Android \u0437\u0430\u043f\u0440\u043e\u0441\u0438\u0442 \u0440\u0430\u0437\u0440\u0435\u0448\u0435\u043d\u0438\u0435 \u2014 \u043d\u0430\u0436\u043c\u0438\u0442\u0435 <b>\u00ab Allow \u00bb</b>\n"
+        "4. \u0412 \u0441\u0442\u0430\u0442\u0443\u0441\u043d\u043e\u0439 \u0441\u0442\u0440\u043e\u043a\u0435 \u043f\u043e\u044f\u0432\u0438\u0442\u0441\u044f \u0437\u043d\u0430\u0447\u043e\u043a \u00ab<b>VPN</b>\u00bb \u2014 \u0432\u0441\u0451 \u0440\u0430\u0431\u043e\u0442\u0430\u0435\u0442! \ud83c\udf89\n\n"
+        "\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\u2015\n"
+        "<b>\ud83d\udd04 \u0415\u0441\u043b\u0438 \u043d\u0435 \u0440\u0430\u0431\u043e\u0442\u0430\u0435\u0442:</b>\n"
+        "\u2022 \u041f\u0440\u043e\u0432\u0435\u0440\u044c\u0442\u0435 \u0431\u0430\u043b\u0430\u043d\u0441 \u0432 \u00ab\ud83d\udc64 \u041c\u043e\u0439 \u043f\u0440\u043e\u0444\u0438\u043b\u044c\u00bb\n"
+        "\u2022 \u041f\u043e\u043f\u0440\u043e\u0431\u0443\u0439\u0442\u0435 \u043f\u0435\u0440\u0435\u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c\u0441\u044f (\u0432\u044b\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u0438 \u0432\u043a\u043b\u044e\u0447\u0438\u0442\u044c)\n"
+        "\u2022 \u0415\u0441\u043b\u0438 \u043d\u0435 \u043f\u043e\u043c\u043e\u0433\u043b\u043e \u2014 \u043d\u0430\u043f\u0438\u0448\u0438\u0442\u0435 \u0432 \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u043a\u0443, \u044f \u043e\u0442\u0432\u0435\u0447\u0443 \u043b\u0438\u0447\u043d\u043e \ud83d"
     )
 
     if isinstance(target, types.CallbackQuery):
@@ -91,7 +83,7 @@ async def send_dynamic_instruction(
 
 
 @dp.message(Command("start"))
-async def start_cmd(message: types.Message) -> None:
+async def start_cmd(message: types.Message, command: CommandObject) -> None:
     user_id = message.from_user.id
     username = message.from_user.username or f"user_{user_id}"
 
@@ -109,16 +101,32 @@ async def start_cmd(message: types.Message) -> None:
         )
         logger.info("start_cmd.new_user user_id=%s", user_id)
 
+    # Deep link: /start pay  — редирект из webapp на оплату
+    if command.args == "pay":
+        builder = InlineKeyboardBuilder()
+        builder.row(
+            types.InlineKeyboardButton(
+                text="💳 Пополнить баланс",
+                callback_data="buy_vpn",
+            )
+        )
+        await message.answer(
+            "💰 <b>Пополнение баланса</b>\n\nНажмите кнопку ниже, чтобы выбрать сумму пополнения:",
+            parse_mode="HTML",
+            reply_markup=builder.as_markup(),
+        )
+        return
+
     name = html.escape(message.from_user.first_name)
     text = (
         f"Привет, {name}! 👋\n\n"
-        "<b>MetronVPN</b> — быстрый и надёжный VPN без лишних слов.\n\n"
-        "⚡️ <b>Безлимитный трафик</b> — никаких ограничений по скорости\n"
-        "🔒 <b>Полная анонимность</b> — ваши данные только ваши\n"
-        "🌍 <b>Обход блокировок</b> — YouTube, Instagram, любые сайты\n"
-        "📱 <b>Все устройства</b> — iOS, Android, Windows, macOS, Linux\n"
-        "⏱ <b>Подключение за 1 минуту</b> — просто нажмите кнопку\n\n"
-        "Нажмите <b>«🚀 Подключить VPN»</b> — первые дни бесплатно!\n\n"
+        "<b>MetronVPN</b> \u2014 быстрый и надёжный VPN без лишних слов.\n\n"
+        "⚡️ <b>Безлимитный трафик</b> \u2014 никаких ограничений по скорости\n"
+        "🔒 <b>Полная анонимность</b> \u2014 ваши данные только ваши\n"
+        "🌍 <b>Обход блокировок</b> \u2014 YouTube, Instagram, любые сайты\n"
+        "📱 <b>Все устройства</b> \u2014 iOS, Android, Windows, macOS, Linux\n"
+        "⏱ <b>Подключение за 1 минуту</b> \u2014 просто нажмите кнопку\n\n"
+        "Нажмите <b>«🚀 Подключить VPN»</b> \u2014 первые дни бесплатно!\n\n"
         "📢 Новости и обновления: <a href='https://t.me/metronVPN'>t.me/metronVPN</a>"
     )
     await message.answer(text, reply_markup=main_kb(), parse_mode="HTML", disable_web_page_preview=True)
