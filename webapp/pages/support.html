@@ -151,8 +151,8 @@
       ></textarea>
       <div class="char-counter" id="char-counter">0 / 1000</div>
 
-      <!-- Прикрепить файл -->
-      <div class="attach-area" id="attach-area">
+      <!-- Прикрепить файл — скрыто визуально, логика сохранена -->
+      <div class="attach-area" id="attach-area" style="display:none;">
         <button class="attach-btn" onclick="document.getElementById('file-input').click()">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66L9.41 17.41a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
@@ -250,7 +250,6 @@
     function updateSendBtn() {
       const ta  = document.getElementById('support-text');
       const btn = document.getElementById('btn-send');
-      // Кнопка недоступна без USER_ID или при тексте < 5 символов
       btn.disabled = !USER_ID || ta.value.trim().length < 5;
     }
 
@@ -269,7 +268,7 @@
         if (attachedFiles.find(f => f.name === file.name)) continue;
         attachedFiles.push(file);
       }
-      input.value = ''; // сброс чтобы можно было выбрать тот же файл снова
+      input.value = '';
       renderFileChips();
     }
 
@@ -280,9 +279,7 @@
 
     function renderFileChips() {
       const area = document.getElementById('attach-area');
-      // Удаляем старые чипы, оставляем кнопку
       area.querySelectorAll('.file-chip').forEach(el => el.remove());
-
       for (const file of attachedFiles) {
         const chip = document.createElement('div');
         chip.className = 'file-chip';
@@ -344,7 +341,6 @@
     // ---- История ----
     async function loadTickets() {
       if (!USER_ID) {
-        // Без USER_ID загрузка бессмысленна — показываем явную ошибку вместо пустого списка
         renderTickets(null);
         showToast('⚠️ Откройте приложение через Telegram');
         return;
