@@ -113,6 +113,24 @@ async def _get_user_or_404(user_id: int) -> dict:
     return user
 
 
+async def _assert_not_last_active_device(user_id: int, device_id: int) -> None:
+    """
+    Raises HTTP 409 if `device_id` is the only active device for `user_id`.
+
+    This is a server-side safeguard that mirrors the client-side lock in
+    profile.html.  Without it, a direct API call could remove the last device
+    while billing still tries to charge the user, or leave a ghost client in
+    the panel with no corresponding DB record.
+    """
+    all_devices = await get_user_devices(user_id)
+    active_ids = [d["id"] for d in all_devices if d.get("is_active")]
+    if active_ids == [device_id]:
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot remove the last active device. Disable your subscription first.",
+        )
+
+
 # ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
@@ -213,6 +231,9 @@ async def delete_device(user_id: int, device_id: int):
     if not device or device["user_id"] != user_id:
         raise HTTPException(status_code=404, detail="Device not found")
 
+    # Server-side guard: cannot deactivate the last active device.
+    await _assert_not_last_active_device(user_id, device_id)
+
     if device["is_active"]:
         from app.core.panel_client import update_client_fields
         from app.config import INBOUND_ID
@@ -238,6 +259,9 @@ async def hard_delete_device(user_id: int, device_id: int):
     device = await get_device_by_id(device_id)
     if not device or device["user_id"] != user_id:
         raise HTTPException(status_code=404, detail="Device not found")
+
+    # Server-side guard: cannot hard-delete the last active device.
+    await _assert_not_last_active_device(user_id, device_id)
 
     panel_ok, panel_err = await remove_device_from_panel(
         client_uuid=device["client_uuid"],
