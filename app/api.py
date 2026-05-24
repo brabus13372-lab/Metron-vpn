@@ -1,3 +1,5 @@
+import html
+import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -36,7 +38,10 @@ from app.db import (
     get_user_tickets,
 )
 from app.services.vpn import rotate_user_key, add_device_to_panel, rotate_client_uuid
-from app.config import BOT_NAME
+from app.config import BOT_NAME, ADMIN_ID
+from app.bot.bot import bot
+
+logger = logging.getLogger(__name__)
 
 # Maximum number of files per support ticket
 _SUPPORT_MAX_FILES = 5
@@ -230,7 +235,6 @@ async def rotate_device_key(user_id: int, device_id: int):
         raise HTTPException(status_code=409, detail="Device is disabled")
 
     old_uuid = device["client_uuid"]
-    # Используем device_name (не username) — именно с ним строился vless_link при создании
     device_label = device["device_name"]
 
     try:
@@ -318,16 +322,14 @@ async def submit_support_ticket(
 ):
     """
     Принять обращение в поддержку.
-    Файлы сохраняются только как метаданные (имя, размер, тип) — бинарные данные
-    не сохраняются в БД. При необходимости добавить объектное хранилище (S3/MinIO).
+    Сохраняет тикет в БД и отправляет уведомление администратору в Telegram.
     """
-    await _get_user_or_404(user_id)
+    user = await _get_user_or_404(user_id)
 
     files_meta: List[Dict[str, Any]] = []
     if files:
         seen_names: set[str] = set()
         for upload in files[:_SUPPORT_MAX_FILES]:
-            # читаем только первые байты для проверки размера
             content = await upload.read()
             if len(content) > _SUPPORT_MAX_FILE_SIZE:
                 raise HTTPException(
@@ -350,11 +352,37 @@ async def submit_support_ticket(
         files=files_meta,
     )
 
-    # Получаем только что созданный тикет для ответа
     tickets = await get_user_tickets(user_id, limit=1)
     ticket = next((t for t in tickets if t["id"] == ticket_id), None)
     if not ticket:
         raise HTTPException(status_code=500, detail="Ticket created but not found")
+
+    # ── Уведомление администратору в Telegram ────────────────────────────────
+    if ADMIN_ID:
+        username = user.get("username") or f"id{user_id}"
+        files_info = ""
+        if files_meta:
+            names = ", ".join(f["name"] for f in files_meta)
+            files_info = f"\n📎 Файлы: {names}"
+
+        notify_text = (
+            f"🆘 <b>Новое обращение в поддержку</b>\n"
+            f"👤 @{html.escape(username)} (<code>{user_id}</code>)\n"
+            f"🎫 Тикет #{ticket_id}\n\n"
+            f"💬 {html.escape(message)}{files_info}\n\n"
+            f"<i>Ответить пользователю:</i> /reply_{user_id}"
+        )
+
+        try:
+            await bot.send_message(
+                chat_id=ADMIN_ID,
+                text=notify_text,
+                parse_mode="HTML",
+            )
+            logger.info("support notify sent to admin %s, ticket_id=%s, user_id=%s", ADMIN_ID, ticket_id, user_id)
+        except Exception as exc:
+            logger.warning("support notify failed admin=%s ticket=%s: %s", ADMIN_ID, ticket_id, exc)
+    # ─────────────────────────────────────────────────────────────────────────
 
     return SupportTicketOut(
         id=ticket["id"],
