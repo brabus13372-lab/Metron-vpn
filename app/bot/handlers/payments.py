@@ -71,7 +71,12 @@ def _validate_payment(payment: types.SuccessfulPayment, user_id: int) -> bool:
 
 
 async def _execute_activation(user_id: int, bot: Bot) -> None:
-    """Активирует устройства в панели и синхронизирует is_active в БД."""
+    """
+    Активирует устройства в панели и синхронизирует is_active в БД.
+
+    Устройства с disabled_reason='user_request' пропускаются как в панели, так и в БД —
+    выбор пользователя сохраняется после пополнения баланса.
+    """
     try:
         success, failed, errors = await activate_all_user_devices(user_id)
         if success == 0 and failed > 0:
@@ -89,6 +94,15 @@ async def _execute_activation(user_id: int, bot: Bot) -> None:
     try:
         devices = await get_user_devices(user_id)
         for dev in devices:
+            # Do NOT re-enable devices the user explicitly disabled.
+            # activate_all_user_devices already skipped them in the panel;
+            # here we mirror that logic so the DB stays consistent.
+            if dev.get("disabled_reason") == "user_request":
+                logger.info(
+                    "_execute_activation.skip_db user_id=%s device=%s reason=user_request",
+                    user_id, dev["device_name"],
+                )
+                continue
             await activate_device(dev["id"], user_id)
     except Exception as e:
         logger.exception("Failed to sync is_active after activation user=%s", user_id)
