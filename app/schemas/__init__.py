@@ -5,6 +5,7 @@ from app.schemas.user import (
     UserProfileOut,
     OkResponse,
     RotateKeyResponse,
+    RotateDeviceKeyResponse,
     HealthResponse,
 )
 
@@ -15,5 +16,6 @@ __all__ = [
     "UserProfileOut",
     "OkResponse",
     "RotateKeyResponse",
+    "RotateDeviceKeyResponse",
     "HealthResponse",
 ]
