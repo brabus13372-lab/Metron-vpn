@@ -25,5 +25,7 @@ tzdata
 
 fastapi
 
+# Required for Form(...) and UploadFile in FastAPI endpoints
+python-multipart
 
 uvicorn[standard]
