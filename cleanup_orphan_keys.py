@@ -22,16 +22,16 @@ cleanup_orphan_keys.py
     --dry-run   (по умолчанию) — только показывает что будет сделано
     --apply     — реально чистит панель и БД
 
-Переменные окружения (берутся из .env или окружения):
-    DATABASE_URL    — asyncpg DSN
-    PANEL_URL       — https://your-panel.com:port
-    PANEL_LOGIN     — логин в панели
-    PANEL_PASSWORD  — пароль в панели
-    INBOUND_ID      — id инбаунда (integer, default=1)
+Переменные окружения:
+    DATABASE_URL  — asyncpg DSN
+    PANEL_URL     — https://your-panel.com:port
+    PANEL_USER    — логин в панели
+    PANEL_PASS    — пароль в панели
+    INBOUND_ID    — id инбаунда (integer, default=1)
 
 Использование:
-    python cleanup_orphan_keys.py --dry-run
-    python cleanup_orphan_keys.py --apply
+    export $(grep -v '^#' .env | xargs) && python cleanup_orphan_keys.py --dry-run
+    export $(grep -v '^#' .env | xargs) && python cleanup_orphan_keys.py --apply
 """
 from __future__ import annotations
 
@@ -52,11 +52,11 @@ log = logging.getLogger("cleanup")
 
 # ─── env ──────────────────────────────────────────────────────────────────────
 
-PANEL_URL      = os.environ.get("PANEL_URL", "").rstrip("/")
-PANEL_LOGIN    = os.environ.get("PANEL_LOGIN", "")
-PANEL_PASSWORD = os.environ.get("PANEL_PASSWORD", "")
-INBOUND_ID     = int(os.environ.get("INBOUND_ID", "1"))
-DATABASE_URL   = os.environ.get("DATABASE_URL", "")
+PANEL_URL  = os.environ.get("PANEL_URL", "").rstrip("/")
+PANEL_USER = os.environ.get("PANEL_USER", "")
+PANEL_PASS = os.environ.get("PANEL_PASS", "")
+INBOUND_ID = int(os.environ.get("INBOUND_ID", "1"))
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
 _session_cookie: str | None = None
 
@@ -68,7 +68,7 @@ async def _panel_login(client: httpx.AsyncClient) -> bool:
     try:
         resp = await client.post(
             f"{PANEL_URL}/login",
-            data={"username": PANEL_LOGIN, "password": PANEL_PASSWORD},
+            data={"username": PANEL_USER, "password": PANEL_PASS},
             follow_redirects=True,
             timeout=15,
         )
@@ -123,10 +123,6 @@ async def _panel_delete_client(
 # ─── DB helpers ───────────────────────────────────────────────────────────────
 
 async def find_orphans(pool: asyncpg.Pool) -> list[dict]:
-    """
-    Пользователи у которых есть аккаунтный uuid И хотя бы одно активное устройство.
-    Именно они имеют «лишний» нетарифицируемый клиент в панели.
-    """
     rows = await pool.fetch(
         """
         SELECT
@@ -148,7 +144,6 @@ async def find_orphans(pool: asyncpg.Pool) -> list[dict]:
 
 
 async def clear_account_key_in_db(pool: asyncpg.Pool, user_id: int) -> None:
-    """Обнуляем users.vless_link и users.uuid — клиент в панели уже удалён."""
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute(
@@ -164,9 +159,12 @@ async def run(apply: bool) -> None:
         log.error("DATABASE_URL not set"); sys.exit(1)
     if apply and not PANEL_URL:
         log.error("PANEL_URL not set"); sys.exit(1)
+    if apply and not PANEL_USER:
+        log.error("PANEL_USER not set"); sys.exit(1)
+    if apply and not PANEL_PASS:
+        log.error("PANEL_PASS not set"); sys.exit(1)
 
     pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=3)
-
     orphans = await find_orphans(pool)
 
     if not orphans:
@@ -178,10 +176,8 @@ async def run(apply: bool) -> None:
     for o in orphans:
         log.info(
             "  user_id=%-10s  username=%-20s  account_uuid=%s  active_devices=%s",
-            o["user_id"],
-            o["username"] or "—",
-            o["account_uuid"],
-            o["active_device_count"],
+            o["user_id"], o["username"] or "—",
+            o["account_uuid"], o["active_device_count"],
         )
 
     if not apply:
@@ -190,7 +186,7 @@ async def run(apply: bool) -> None:
         await pool.close()
         return
 
-    # ── APPLY ─────────────────────────────────────────────────────────────────
+    # ── APPLY ──────────────────────────────────────────────────────────────
     log.info("")
     log.info("APPLY mode — starting cleanup...")
 
