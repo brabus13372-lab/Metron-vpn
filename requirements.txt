@@ -5,7 +5,10 @@ aiogram==3.20.0
 fastapi>=0.115.0
 uvicorn[standard]
 
-# Async HTTP client (панель 3x-ui, все внешние запросы)
+# Async HTTP client — panel_client.py (3x-ui REST API)
+aiohttp
+
+# Async HTTP client — cleanup_orphan_keys.py
 httpx>=0.27.0
 
 # PostgreSQL async driver
