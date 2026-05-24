@@ -338,7 +338,8 @@
     if (tg) { tg.expand(); tg.ready(); tg.enableClosingConfirmation(); }
 
     const tgUser = tg?.initDataUnsafe?.user;
-    const USER_ID = tgUser?.id ?? null;
+    const params = new URLSearchParams(window.location.search);
+    const USER_ID = tgUser?.id ?? (params.get('uid') ? parseInt(params.get('uid')) : null);
 console.log("TG:", JSON.stringify(tg?.initDataUnsafe));
 
     let _vlessKey = '';

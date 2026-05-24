@@ -125,7 +125,7 @@ async def start_cmd(message: types.Message) -> None:
     webapp_kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(
             text="🌐 Личный кабинет",
-            web_app=WebAppInfo(url=WEBAPP_URL)
+            WebAppInfo(url=f"{WEBAPP_URL}?uid={message.from_user.id}")
         )
     ]])
     await message.answer("Открой свой личный кабинет 👇", reply_markup=webapp_kb)
