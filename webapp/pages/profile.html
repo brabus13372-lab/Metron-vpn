@@ -87,9 +87,109 @@
       transition: transform var(--transition-slow);
     }
     .modal-overlay.open .modal-sheet { transform: translateY(0); }
+
+    /* Инструкция — шторка на всю высоту */
+    .modal-overlay.modal-tall {
+      align-items: flex-start;
+      padding-top: calc(env(safe-area-inset-top, 0px) + var(--space-4));
+    }
+    .modal-overlay.modal-tall .modal-sheet {
+      max-height: calc(100dvh - env(safe-area-inset-top, 0px) - var(--nav-height) - var(--space-12));
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
     .modal-title { font-size: var(--text-base); font-weight: 700; margin-bottom: var(--space-2); }
     .modal-desc  { font-size: var(--text-sm); color: var(--color-text-muted); margin-bottom: var(--space-6); }
     .modal-actions { display: flex; flex-direction: column; gap: var(--space-3); }
+
+    /* ---------- Инструкция ---------- */
+    .instr-divider {
+      border: none;
+      border-top: 1px solid var(--color-divider);
+      margin: var(--space-5) 0;
+    }
+    .instr-step {
+      margin-bottom: var(--space-5);
+    }
+    .instr-step-header {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      margin-bottom: var(--space-3);
+    }
+    .instr-step-num {
+      width: 28px; height: 28px;
+      border-radius: var(--radius-full);
+      background: var(--color-primary);
+      color: #fff;
+      font-size: var(--text-xs);
+      font-weight: 700;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .instr-step-title {
+      font-size: var(--text-sm);
+      font-weight: 700;
+      color: var(--color-text);
+    }
+    .instr-step-body {
+      font-size: var(--text-sm);
+      color: var(--color-text-muted);
+      line-height: 1.6;
+      padding-left: calc(28px + var(--space-3));
+    }
+    .instr-step-body p { margin-bottom: var(--space-2); }
+    .instr-step-body p:last-child { margin-bottom: 0; }
+    .instr-platform {
+      display: flex;
+      align-items: flex-start;
+      gap: var(--space-2);
+      margin-bottom: var(--space-2);
+    }
+    .instr-platform-icon { font-size: 16px; line-height: 1.5; flex-shrink: 0; }
+    .instr-step-body a {
+      color: var(--color-primary);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    .instr-trouble {
+      background: var(--color-surface-offset);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-lg);
+      padding: var(--space-4);
+      font-size: var(--text-sm);
+      color: var(--color-text-muted);
+      margin-top: var(--space-5);
+    }
+    .instr-trouble-title {
+      font-weight: 700;
+      color: var(--color-text);
+      margin-bottom: var(--space-2);
+    }
+    .instr-trouble ul {
+      list-style: none;
+      padding: 0; margin: 0;
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2);
+    }
+    .instr-trouble li::before {
+      content: "• ";
+      color: var(--color-text-faint);
+    }
+    .instr-key-preview {
+      background: var(--color-bg);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-md);
+      padding: var(--space-3) var(--space-4);
+      font-size: var(--text-xs);
+      font-family: monospace;
+      color: var(--color-text-muted);
+      word-break: break-all;
+      margin-top: var(--space-2);
+      position: relative;
+    }
 
     /* ---------- Шторка устройства ---------- */
     .device-sheet-header {
@@ -268,8 +368,7 @@
         <span class="key-text" id="vless-key">Ключ не найден</span>
         <button class="copy-btn" id="btn-copy-key" onclick="copyKey()" aria-label="Скопировать ключ">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="9" y="9" width="13" height="13" rx="2"/>
-            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+            <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
           </svg>
         </button>
       </div>
@@ -326,6 +425,125 @@
       <span>Поддержка</span>
     </a>
   </nav>
+
+  <!-- ======================================================
+       Modal: ИНСТРУКЦИЯ ПО ПОДКЛЮЧЕНИЮ
+       ====================================================== -->
+  <div class="modal-overlay modal-tall" id="modal-instruction">
+    <div class="modal-sheet">
+
+      <!-- Заголовок -->
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:var(--space-5);">
+        <div>
+          <div style="font-size:var(--text-base); font-weight:700;">📖 Инструкция по подключению</div>
+          <div style="font-size:var(--text-xs); color:var(--color-text-faint); margin-top:var(--space-1);">v2RayTun · VLESS · Reality</div>
+        </div>
+        <button onclick="closeModal('modal-instruction')" style="padding:var(--space-2); color:var(--color-text-faint);" aria-label="Закрыть">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+
+      <hr class="instr-divider" style="margin-top:0;">
+
+      <!-- ШАГ 1 -->
+      <div class="instr-step">
+        <div class="instr-step-header">
+          <div class="instr-step-num">1</div>
+          <div class="instr-step-title">🔑 Скопируйте ваш ключ</div>
+        </div>
+        <div class="instr-step-body">
+          <p>Нажмите на иконку копирования рядом с ключом выше — он скопируется автоматически.</p>
+          <div class="instr-key-preview" id="instr-key-preview">vless://…</div>
+        </div>
+      </div>
+
+      <hr class="instr-divider">
+
+      <!-- ШАГ 2 -->
+      <div class="instr-step">
+        <div class="instr-step-header">
+          <div class="instr-step-num">2</div>
+          <div class="instr-step-title">📲 Установите приложение</div>
+        </div>
+        <div class="instr-step-body">
+          <div class="instr-platform">
+            <span class="instr-platform-icon">💙</span>
+            <span><strong>iPhone / iPad (iOS):</strong><br>Откройте App Store и скачайте <strong>v2RayTun</strong></span>
+          </div>
+          <div class="instr-platform">
+            <span class="instr-platform-icon">💚</span>
+            <span><strong>Android:</strong><br>Скачайте <a href="https://play.google.com/store/apps/details?id=com.v2raytun.android" target="_blank" rel="noopener noreferrer">v2RayTun в Google Play</a></span>
+          </div>
+          <div class="instr-platform">
+            <span class="instr-platform-icon">🖥</span>
+            <span><strong>Windows / macOS / Linux:</strong><br>Скачайте с сайта <a href="https://v2raytun.com/" target="_blank" rel="noopener noreferrer">v2raytun.com</a> — выберите свою ОС</span>
+          </div>
+        </div>
+      </div>
+
+      <hr class="instr-divider">
+
+      <!-- ШАГ 3 -->
+      <div class="instr-step">
+        <div class="instr-step-header">
+          <div class="instr-step-num">3</div>
+          <div class="instr-step-title">⚙️ Добавьте ключ в приложение</div>
+        </div>
+        <div class="instr-step-body">
+          <p>1. Откройте <strong>v2RayTun</strong></p>
+          <p>2. Нажмите <strong>[ + ]</strong> в правом верхнем углу</p>
+          <p>3. Выберите <strong>«Import from Clipboard»</strong></p>
+          <p>4. Ключ вставится автоматически — нажмите <strong>«Save»</strong></p>
+        </div>
+      </div>
+
+      <hr class="instr-divider">
+
+      <!-- ШАГ 4 -->
+      <div class="instr-step" style="margin-bottom:0;">
+        <div class="instr-step-header">
+          <div class="instr-step-num">4</div>
+          <div class="instr-step-title">🟢 Включите VPN</div>
+        </div>
+        <div class="instr-step-body">
+          <p>1. Выберите сохранённый конфиг <strong>(MetronVPN)</strong></p>
+          <p>2. Нажмите большую кнопку подключения посередине</p>
+          <p>3. При первом запуске iOS/Android запросит разрешение — нажмите <strong>«Allow»</strong></p>
+          <p>4. В статусной строке появится значок «VPN» — всё работает! 🎉</p>
+        </div>
+      </div>
+
+      <!-- Блок: если не работает -->
+      <div class="instr-trouble">
+        <div class="instr-trouble-title">🔄 Если не работает:</div>
+        <ul>
+          <li>Проверьте баланс в личном кабинете</li>
+          <li>Попробуйте переподключиться (выключить и включить)</li>
+          <li>Если не помогло — напишите в поддержку 👇</li>
+        </ul>
+      </div>
+
+      <!-- Действия -->
+      <div class="modal-actions" style="margin-top:var(--space-5);">
+        <button class="btn btn-primary btn-full" onclick="copyKeyFromInstruction()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+          </svg>
+          Скопировать ключ
+        </button>
+        <button class="btn btn-ghost btn-full" id="btn-instr-support" onclick="openSupport()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+          Написать в поддержку
+        </button>
+        <button class="btn btn-ghost btn-full" onclick="closeModal('modal-instruction')">Закрыть</button>
+      </div>
+
+    </div>
+  </div>
 
   <!-- ======================================================
        Modal: шторка устройства (детали + ротация + удаление)
@@ -435,7 +653,6 @@
     let _vlessKey  = '';
     let _devices   = [];
     let _activeDevice = null;
-    // ID первого (основного) устройства — определяется по created_at
     let _primaryDeviceId = null;
     let _botName = null;
 
@@ -504,7 +721,6 @@
 
       _devices = data.devices ?? [];
 
-      // Определяем основное устройство — самое старое по created_at
       if (_devices.length) {
         const sorted = [..._devices].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
         _primaryDeviceId = sorted[0].id;
@@ -549,12 +765,10 @@
 
       const isPrimary = dev.id === _primaryDeviceId;
 
-      // Шапка
       const dot = document.getElementById('ds-dot');
       dot.className = `device-sheet-dot ${dev.is_active ? 'active' : 'inactive'}`;
       document.getElementById('ds-name').textContent = dev.device_name;
 
-      // Статус с пометкой основного
       let statusText = dev.is_active ? 'Активно' : 'Отключено';
       if (dev.disabled_reason && !dev.is_active) {
         const reasonMap = { user_request: 'по запросу', billing: 'недостаточно средств' };
@@ -563,7 +777,6 @@
       if (isPrimary) statusText = `⭐ Основное · ${statusText}`;
       document.getElementById('ds-status').textContent = statusText;
 
-      // Ключ
       const keySection = document.getElementById('ds-key-section');
       const keyText    = document.getElementById('ds-key-text');
       if (dev.vless_link) {
@@ -573,12 +786,10 @@
         keySection.style.display = 'none';
       }
 
-      // ---- Формируем кнопки действий динамически ----
       const actionsDiv = document.getElementById('ds-actions');
       actionsDiv.innerHTML = '';
 
       if (dev.is_active) {
-        // Кнопка ротации ключа
         const btnRotate = document.createElement('button');
         btnRotate.className = 'btn btn-primary btn-full';
         btnRotate.id = 'btn-ds-rotate';
@@ -591,7 +802,6 @@
         btnRotate.onclick = doRotateDevice;
         actionsDiv.appendChild(btnRotate);
 
-        // Кнопка отключения — только для НЕ основного устройства
         if (!isPrimary) {
           const btnDelete = document.createElement('button');
           btnDelete.className = 'btn btn-danger btn-full';
@@ -601,14 +811,12 @@
           actionsDiv.appendChild(btnDelete);
         }
       } else {
-        // Устройство отключено — показываем информационный текст
         const infoEl = document.createElement('div');
         infoEl.className = 'device-disabled-info';
         infoEl.textContent = 'Устройство отключено. Оно сохранено, но недоступно.';
         actionsDiv.appendChild(infoEl);
       }
 
-      // Кнопка закрыть — всегда
       const btnClose = document.createElement('button');
       btnClose.className = 'btn btn-ghost btn-full';
       btnClose.textContent = 'Закрыть';
@@ -618,7 +826,6 @@
       openModal('modal-device');
     };
 
-    // Копировать ключ из шторки устройства
     window.copyDeviceSheetKey = function() {
       const text = document.getElementById('ds-key-text').textContent;
       if (!text || text === '—') return;
@@ -659,7 +866,7 @@
     };
 
     // ------------------------------------------------------------------
-    // Мягкое отключение устройства (soft delete через шторку)
+    // Мягкое отключение устройства
     // ------------------------------------------------------------------
     window.doDeleteDevice = function() {
       if (!_activeDevice) return;
@@ -672,7 +879,6 @@
       openModal('modal-delete');
     };
 
-    // Мягкое отключение — вызывает DELETE /api/user/:id/devices/:id (soft, is_active=false)
     async function confirmDeactivateDevice(id) {
       const btn = document.getElementById('btn-confirm-delete');
       btn.disabled = true;
@@ -772,6 +978,44 @@
     };
 
     // ------------------------------------------------------------------
+    // Инструкция
+    // ------------------------------------------------------------------
+    window.openInstruction = function() {
+      // Подставляем превью ключа в инструкцию
+      const preview = document.getElementById('instr-key-preview');
+      if (_vlessKey) {
+        const short = _vlessKey.length > 60 ? _vlessKey.slice(0, 60) + '…' : _vlessKey;
+        preview.textContent = short;
+      } else {
+        preview.textContent = 'Ключ не найден — сначала загрузите профиль';
+      }
+      openModal('modal-instruction');
+    };
+
+    window.copyKeyFromInstruction = function() {
+      if (!_vlessKey) { showToast('❌ Ключ не найден'); return; }
+      navigator.clipboard.writeText(_vlessKey).then(() => {
+        showToast('✅ Ключ скопирован');
+      });
+    };
+
+    // ------------------------------------------------------------------
+    // Поддержка — редирект в бота
+    // ------------------------------------------------------------------
+    window.openSupport = function() {
+      closeModal('modal-instruction');
+      if (_botName) {
+        if (tg) {
+          tg.openTelegramLink(`https://t.me/${_botName}?start=support`);
+        } else {
+          window.open(`https://t.me/${_botName}?start=support`, '_blank');
+        }
+      } else {
+        window.location.href = 'support.html';
+      }
+    };
+
+    // ------------------------------------------------------------------
     // Разное
     // ------------------------------------------------------------------
     window.openTopup = function() {
@@ -783,15 +1027,6 @@
         tg.openTelegramLink(`https://t.me/${_botName}?start=topup`);
       } else {
         window.open(`https://t.me/${_botName}?start=topup`, '_blank');
-      }
-    };
-    window.openInstruction = function() {
-      if (tg) {
-        tg.showPopup({
-          title: 'Подключение VPN',
-          message: '1. Установите V2RayTun или Hiddify\n2. Скопируйте ключ выше\n3. Вставьте в приложение\n4. Подключитесь',
-          buttons: [{ type: 'ok', text: 'Понятно' }]
-        });
       }
     };
 
