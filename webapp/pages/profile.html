@@ -231,9 +231,13 @@
     <!-- VPN-ключ -->
     <div class="card" style="margin-bottom:var(--space-4);">
       <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:var(--space-3);">
+        <!-- левая часть: заголовок + подпись стопкой -->
+        <div style="display:flex; flex-direction:column; gap:var(--space-1); min-width:0;">
           <div class="card-title">Ключ аккаунта</div>
-         <div style="font-size:var(--text-xs); color:var(--color-text-faint); margin-top:var(--space-1);">Общий ключ пользователя, не связан с устройствами</div>
-        <button class="btn btn-ghost" id="btn-rotate" onclick="rotateKey()" style="padding:var(--space-2) var(--space-3); font-size:var(--text-xs); gap:var(--space-2);">
+          <div style="font-size:var(--text-xs); color:var(--color-text-faint);">Общий ключ, не связан с устройствами</div>
+        </div>
+        <!-- правая часть: кнопка -->
+        <button class="btn btn-ghost" id="btn-rotate" onclick="rotateKey()" style="flex-shrink:0; padding:var(--space-2) var(--space-3); font-size:var(--text-xs); gap:var(--space-2);">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
             <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
@@ -329,6 +333,7 @@
     </div>
   </div>
 
+  <!-- Modal: новый ключ устройства -->
   <div class="modal-overlay" id="modal-new-key">
     <div class="modal-sheet">
       <div class="modal-title">Ключ обновлён</div>
@@ -360,7 +365,6 @@
     const tgUser = tg?.initDataUnsafe?.user;
     const params = new URLSearchParams(window.location.search);
     const USER_ID = tgUser?.id ?? (params.get('uid') ? parseInt(params.get('uid')) : null);
-console.log("TG:", JSON.stringify(tg?.initDataUnsafe));
 
     let _vlessKey = '';
     let _devices  = [];
@@ -478,13 +482,10 @@ console.log("TG:", JSON.stringify(tg?.initDataUnsafe));
       try {
         const res = await apiRotateDeviceKey(USER_ID, deviceId);
         showToast('✅ Ключ устройства обновлён');
-        // Показываем модалку с новым ключом
         openKeyModal(res.vless_link);
         await loadProfile();
       } catch (e) {
         showToast('❌ Ошибка обновления ключа устройства');
-      } finally {
-        // После loadProfile кнопки перерисуются — восстанавливать не нужно
       }
     };
 
@@ -579,7 +580,7 @@ console.log("TG:", JSON.stringify(tg?.initDataUnsafe));
       document.getElementById('modal-new-key-text').textContent = link;
       openModal('modal-new-key');
     }
-    
+
     window.closeModal = function(id) {
       document.getElementById(id).classList.remove('open');
       document.body.style.overflow = '';
