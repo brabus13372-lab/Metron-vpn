@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -322,7 +323,7 @@ async def submit_support_ticket(
 ):
     """
     Принять обращение в поддержку.
-    Сохраняет тикет в БД и отправляет уведомление администратору в Telegram.
+    Сохраняет тикет в БД и отправляет админу уведомление с кнопкой "Ответить" через Telegram-бот.
     """
     user = await _get_user_or_404(user_id)
 
@@ -357,7 +358,7 @@ async def submit_support_ticket(
     if not ticket:
         raise HTTPException(status_code=500, detail="Ticket created but not found")
 
-    # ── Уведомление администратору в Telegram ────────────────────────────────
+    # ── Уведомление админу в Telegram с кнопкой "Ответить" ────────────────────
     if ADMIN_ID:
         username = user.get("username") or f"id{user_id}"
         files_info = ""
@@ -366,23 +367,35 @@ async def submit_support_ticket(
             files_info = f"\n📎 Файлы: {names}"
 
         notify_text = (
-            f"🆘 <b>Новое обращение в поддержку</b>\n"
+            f"🆘 <b>Новое обращение</b> — через WebApp\n"
             f"👤 @{html.escape(username)} (<code>{user_id}</code>)\n"
             f"🎫 Тикет #{ticket_id}\n\n"
-            f"💬 {html.escape(message)}{files_info}\n\n"
-            f"<i>Ответить пользователю:</i> /reply_{user_id}"
+            f"💬 {html.escape(message)}{files_info}"
         )
+
+        # Кнопка "Ответить" — идентична той что уже есть в forward_to_admin в support.py
+        # callback_data="reply_{user_id}" → запускает admin_reply_button_handler → FSM состояние
+        reply_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✍️ Ответить", callback_data=f"reply_{user_id}")]
+        ])
 
         try:
             await bot.send_message(
                 chat_id=ADMIN_ID,
                 text=notify_text,
                 parse_mode="HTML",
+                reply_markup=reply_kb,
             )
-            logger.info("support notify sent to admin %s, ticket_id=%s, user_id=%s", ADMIN_ID, ticket_id, user_id)
+            logger.info(
+                "support notify sent admin=%s ticket=%s user=%s",
+                ADMIN_ID, ticket_id, user_id,
+            )
         except Exception as exc:
-            logger.warning("support notify failed admin=%s ticket=%s: %s", ADMIN_ID, ticket_id, exc)
-    # ─────────────────────────────────────────────────────────────────────────
+            logger.warning(
+                "support notify failed admin=%s ticket=%s: %s",
+                ADMIN_ID, ticket_id, exc,
+            )
+    # ───────────────────────────────────────────────────────────────────────
 
     return SupportTicketOut(
         id=ticket["id"],
