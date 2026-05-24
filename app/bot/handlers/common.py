@@ -7,6 +7,7 @@ from typing import Union
 from aiogram import F, types
 from aiogram.filters import Command, CommandObject
 from aiogram.types import InlineKeyboardMarkup
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.config import WEBAPP_URL, ADMIN_ID, TRIAL_DAYS
 from app.bot.dispatcher import dp
@@ -100,12 +101,28 @@ async def start_cmd(message: types.Message, command: CommandObject) -> None:
         )
         logger.info("start_cmd.new_user user_id=%s", user_id)
 
-    # Deep link: /start pay — редирект из webapp на оплату (открываем сразу кабинет)
+    # Deep link: /start pay — сразу показываем инлайн-кнопки с суммами
     if command.args in ("pay", "topup"):
+        try:
+            from app.config import PAYMENT_AMOUNTS
+            amounts = PAYMENT_AMOUNTS
+        except ImportError:
+            amounts = [10000, 20000, 50000, 100000]
+
+        builder = InlineKeyboardBuilder()
+        for amount_cents in amounts:
+            rub = amount_cents // 100
+            builder.row(
+                types.InlineKeyboardButton(
+                    text=f"💳 Пополнить на {rub} руб.",
+                    callback_data=f"pay_amount_{amount_cents}",
+                )
+            )
+
         await message.answer(
-            "💰 <b>Пополнение баланса</b>\n\nОткройте личный кабинет для пополнения:",
+            "💰 <b>Пополнение баланса</b>\n\nВыберите сумму:",
             parse_mode="HTML",
-            reply_markup=webapp_button(WEBAPP_URL, user_id),
+            reply_markup=builder.as_markup(),
         )
         return
 
