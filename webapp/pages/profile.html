@@ -780,6 +780,11 @@
     }
 
     loadProfile();
+
+    // Обновляем данные когда юзер возвращается в webapp после оплаты в боте
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') loadProfile();
+    });
   </script>
 
 </body>
