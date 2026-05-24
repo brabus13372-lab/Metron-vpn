@@ -38,7 +38,12 @@ from app.db import (
     create_ticket,
     get_user_tickets,
 )
-from app.services.vpn import rotate_user_key, add_device_to_panel, rotate_client_uuid
+from app.services.vpn import (
+    rotate_user_key,
+    add_device_to_panel,
+    rotate_client_uuid,
+    remove_device_from_panel,
+)
 from app.config import BOT_NAME, ADMIN_ID
 from app.bot.bot import bot
 
@@ -200,7 +205,27 @@ async def create_device(user_id: int, body: DeviceCreateIn):
 
 @app.delete("/api/user/{user_id}/devices/{device_id}", response_model=OkResponse, tags=["devices"])
 async def delete_device(user_id: int, device_id: int):
-    """Деактивирует устройство (soft delete — is_active=False)."""
+    """Деактивирует устройство (soft delete — is_active=False) и отключает клиент в панели."""
+    device = await get_device_by_id(device_id)
+    if not device or device["user_id"] != user_id:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    # Отключаем клиент в панели только если устройство ещё активно
+    if device["is_active"]:
+        from app.core.panel_client import update_client_fields
+        from app.config import INBOUND_ID
+        ok, msg = await update_client_fields(
+            device["client_uuid"],
+            {"enable": False},
+            inbound_id=INBOUND_ID,
+        )
+        if not ok:
+            logger.warning(
+                "delete_device.panel_disable_fail device_id=%s uuid=%s msg=%s",
+                device_id, device["client_uuid"], msg,
+            )
+            # Не блокируем — клиент мог уже не существовать в панели
+
     ok = await deactivate_device(device_id, user_id, reason="user_request")
     if not ok:
         raise HTTPException(status_code=404, detail="Device not found")
@@ -209,7 +234,22 @@ async def delete_device(user_id: int, device_id: int):
 
 @app.delete("/api/user/{user_id}/devices/{device_id}/hard", response_model=OkResponse, tags=["devices"])
 async def hard_delete_device(user_id: int, device_id: int):
-    """Полное удаление устройства из БД."""
+    """Полное удаление устройства из панели и БД."""
+    device = await get_device_by_id(device_id)
+    if not device or device["user_id"] != user_id:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    panel_ok, panel_err = await remove_device_from_panel(
+        client_uuid=device["client_uuid"],
+        user_id=user_id,
+    )
+    if not panel_ok:
+        logger.warning(
+            "hard_delete_device.panel_fail device_id=%s uuid=%s err=%s",
+            device_id, device["client_uuid"], panel_err,
+        )
+        # Не останавливаемся — remove_device_from_panel толерантен к "not found"
+
     deleted = await remove_device(device_id, user_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Device not found")
