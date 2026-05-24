@@ -5,7 +5,6 @@
 import { haptic } from './telegram.js';
 
 export function renderUser(user, data) {
-  // Avatar + имя
   const name = data?.name ?? user?.first_name ?? 'Пользователь';
   const avatarEl = document.getElementById('avatar');
   const usernameEl = document.getElementById('username');
@@ -16,7 +15,6 @@ export function renderUser(user, data) {
 export function renderSubscription(data) {
   const { days_left, days_total, subscription_end, plan } = data;
 
-  // Badge статуса
   const badgeEl = document.getElementById('sub-badge');
   if (badgeEl) {
     const isActive = days_left > 0;
@@ -27,11 +25,9 @@ export function renderSubscription(data) {
       </span>`;
   }
 
-  // Дни
   const daysEl = document.getElementById('days-left');
   if (daysEl) daysEl.textContent = days_left;
 
-  // Дата окончания
   const endEl = document.getElementById('sub-end');
   if (endEl) {
     const date = new Date(subscription_end);
@@ -40,11 +36,9 @@ export function renderSubscription(data) {
     });
   }
 
-  // Тариф
   const planEl = document.getElementById('sub-plan');
   if (planEl) planEl.textContent = plan ?? '—';
 
-  // Прогресс-бар
   const fill = document.getElementById('progress-fill');
   if (fill) {
     const pct = Math.min(100, Math.round((days_left / days_total) * 100));
@@ -59,15 +53,51 @@ export function renderVlessKey(key) {
   if (el) el.textContent = key;
 }
 
-export function showToast(message, duration = 2000) {
+/**
+ * showToast(message, type?, duration?)
+ *
+ * type: 'default' | 'error'
+ *   - 'error'   — красный фон, держится 8с, есть кнопка ×
+ *   - 'default' — обычный, уходит через duration (default 2500мс)
+ */
+export function showToast(message, type = 'default', duration) {
+  // Убираем предыдущий тост
   const existing = document.querySelector('.toast');
   if (existing) existing.remove();
 
+  const isError = type === 'error';
+  const autoDuration = duration ?? (isError ? 8000 : 2500);
+
   const toast = document.createElement('div');
-  toast.className = 'toast';
-  toast.textContent = message;
+  toast.className = `toast${isError ? ' toast-error' : ''}`;
+
+  const inner = document.createElement('div');
+  inner.className = 'toast-inner';
+  inner.textContent = message;
+
+  // Кнопка × — только для ошибок
+  if (isError) {
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'toast-close';
+    closeBtn.setAttribute('aria-label', 'Закрыть');
+    closeBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+    closeBtn.addEventListener('click', () => hideToast(toast));
+    inner.appendChild(closeBtn);
+  }
+
+  toast.appendChild(inner);
   document.body.appendChild(toast);
-  setTimeout(() => toast.remove(), duration);
+
+  // Авто-удаление с анимацией
+  const timer = setTimeout(() => hideToast(toast), autoDuration);
+  toast._hideTimer = timer;
+}
+
+function hideToast(toast) {
+  if (!toast.isConnected) return;
+  clearTimeout(toast._hideTimer);
+  toast.classList.add('toast-hiding');
+  toast.addEventListener('animationend', () => toast.remove(), { once: true });
 }
 
 // Глобальная функция копирования (вызывается из onclick в HTML)
@@ -97,6 +127,6 @@ window.copyKey = async function () {
 
     showToast('✓ Ключ скопирован');
   } catch {
-    showToast('Не удалось скопировать');
+    showToast('Не удалось скопировать', 'error');
   }
 };
