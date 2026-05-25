@@ -101,6 +101,7 @@ def _build_devices(devices_raw: list[dict]) -> list[DeviceOut]:
             daily_cost=round(float(d["monthly_cost"]) / 30, 2),
             vless_link=d.get("vless_link"),
             created_at=d.get("created_at"),
+            disabled_reason=d.get("disabled_reason"),
         )
         for d in devices_raw
     ]

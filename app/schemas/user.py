@@ -14,7 +14,7 @@ class DeviceOut(BaseModel):
     daily_cost: float
     vless_link: Optional[str] = None
     created_at: Optional[datetime] = None
-    # Reason the device was disabled: 'billing' | 'user_request' | None (active)
+    # Reason the device was disabled: 'insufficient_funds' | 'user_request' | None (active)
     # Used by the frontend to render the correct status label.
     disabled_reason: Optional[str] = None
 

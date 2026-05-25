@@ -40,21 +40,23 @@ Metron-vpn/
 ├── main.py                          # Entrypoint: uvicorn + aiogram long-polling
 │
 ├── app/
-│   ├── config.py                    # dotenv → constants (BOT_TOKEN, PANEL_URL, …)
-│   ├── api.py                       # FastAPI: all REST endpoints for WebApp
-│   ├── db.py                        # asyncpg: all SQL queries
-│   ├── schemas.py                   # Pydantic v2 request / response models
-│   ├── vless.py                     # VLESS link builder
-│   ├── logging_sanitizer.py         # Global log filter (masks tokens/cookies)
-│   │
 │   ├── core/
-│   │   └── panel_client.py          # aiohttp client for 3x-ui REST API (login, CRUD)
-│   │
+│   │   ├── panel_client.py          # aiohttp client for 3x-ui REST API
+│   │   ├── logging_sanitizer.py     # Global log filter (masks tokens/cookies)
+│   │   └── vless.py                 # VLESS link builder
+│   ├── db/
+│   │   ├── core.py                  # asyncpg pool + schema verification
+│   │   ├── users.py                 # user queries
+│   │   ├── devices.py               # device queries
+│   │   ├── billing.py               # balance/billing queries
+│   │   └── payments.py              # payment idempotency queries
+│   ├── schemas/
+│   │   └── user.py                  # Pydantic request / response models
 │   ├── services/
 │   │   ├── billing.py               # BillingEngine: daily charge + TRIAL cycle
-│   │   ├── vpn.py                   # Business logic: rotate_user_key, add_device_to_panel
-│   │   └── notifications.py         # APScheduler: subscription expiry reminders
-│   │
+│   │   ├── notifications.py         # APScheduler subscription reminders
+│   │   ├── reconcile.py             # DB ↔ panel drift repair worker
+│   │   └── vpn.py                   # Panel/device business logic
 │   └── bot/
 │       ├── bot.py                   # aiogram Bot instance
 │       ├── dispatcher.py            # Dispatcher + handler registration
@@ -67,10 +69,32 @@ Metron-vpn/
 │           └── admin.py             # Admin commands: broadcast, stats
 │
 ├── webapp/                          # Telegram WebApp (static, served by FastAPI)
-│   └── index.html                   # SPA: profile, devices, billing, support
+│   ├── index.html                   # Entry redirect preserving query string
+│   ├── pages/
+│   │   ├── profile.html             # Main profile/devices/billing page
+│   │   ├── support.html             # Support form + history
+│   │   └── protocols.html           # Static protocol info
+│   ├── assets/
+│   │   ├── css/
+│   │   │   ├── base.css
+│   │   │   ├── components.css
+│   │   │   ├── animations.css
+│   │   │   └── pages/               # Page-specific extracted styles
+│   │   └── js/
+│   │       ├── api.js               # Shared WebApp API client
+│   │       └── pages/               # Page-specific extracted scripts
+│   └── legacy/
+│       └── assets/js/               # Archived stale WebApp modules
 │
-├── migrate_db.py                    # One-time SQLite → PostgreSQL migration
-├── cleanup_orphan_keys.py           # ⚠️  Service script: orphan client cleanup
+├── scripts/
+│   ├── maintenance/
+│   │   └── cleanup_orphan_keys.py   # Canonical orphan account-key cleanup
+│   └── migrations/
+│       └── migrate_db.py            # Canonical SQLite → PostgreSQL migration
+├── cleanup_orphan_keys.py           # Backward-compatible wrapper
+├── migrate_db.py                    # Backward-compatible wrapper
+├── migrations/                      # Alembic env + versions
+├── alembic.ini
 ├── requirements.txt
 ├── .env.example
 └── .gitignore
@@ -79,6 +103,13 @@ Metron-vpn/
 **Data flows:**
 - `Telegram → aiogram handlers → services → db / panel_client`
 - `WebApp → FastAPI (api.py) → db / panel_client → 3x-ui`
+
+**Stable production entrypoints:**
+- `main.py` — service entrypoint for `systemd`
+- `app/` — Python import root
+- `webapp/` — static root mounted by FastAPI
+- `migrations/` + `alembic.ini` — Alembic runtime root
+- Root wrappers `cleanup_orphan_keys.py` and `migrate_db.py` remain supported for operator convenience
 
 ---
 
@@ -268,11 +299,19 @@ The WebApp communicates with the bot via REST API (`app/api.py`).
 > ⚠️ Always verify with `--dry-run` before `--apply`.
 
 ```bash
-# Dry-run: show what would be deleted (no changes)
+# Dry-run: show what would be deleted (no changes).
+# Backward-compatible root wrapper:
 export $(grep -v '^#' .env | xargs) && python cleanup_orphan_keys.py --dry-run
 
-# Apply: run the cleanup
+# Canonical script location:
+export $(grep -v '^#' .env | xargs) && .venv/bin/python -m scripts.maintenance.cleanup_orphan_keys --dry-run
+
+# Apply: run the cleanup.
+# Backward-compatible root wrapper:
 export $(grep -v '^#' .env | xargs) && python cleanup_orphan_keys.py --apply
+
+# Canonical script location:
+export $(grep -v '^#' .env | xargs) && .venv/bin/python -m scripts.maintenance.cleanup_orphan_keys --apply
 ```
 
 The script is **idempotent** — re-running is safe. If the panel is unreachable for a UUID, the DB is not touched and the entry will be retried on the next run.
@@ -280,6 +319,10 @@ The script is **idempotent** — re-running is safe. If the panel is unreachable
 ### `migrate_db.py`
 
 One-time data migration from SQLite → PostgreSQL (used during the production database transition). Not needed for new installations.
+
+Canonical implementation: `.venv/bin/python -m scripts.migrations.migrate_db`
+
+Backward-compatible wrapper: `python migrate_db.py`
 
 ---
 

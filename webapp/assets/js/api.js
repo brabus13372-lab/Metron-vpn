@@ -4,9 +4,19 @@
 
 const BASE_URL = '';
 
+async function parseApiError(res) {
+  try {
+    const body = await res.json();
+    if (body?.detail) return String(body.detail);
+  } catch {
+    // ignore JSON parse failures and fall back to status
+  }
+  return `API error: ${res.status}`;
+}
+
 async function request(path, options = {}) {
   const res = await fetch(`${BASE_URL}${path}`, options);
-  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  if (!res.ok) throw new Error(await parseApiError(res));
   return res.json();
 }
 
@@ -27,9 +37,7 @@ export async function fetchUserData(userId) {
 }
 
 export async function rotateKey(userId) {
-  const res = await fetch(`/api/user/${userId}/rotate-key`, { method: 'POST' });
-  if (!res.ok) throw new Error(`API error: ${res.status}`);
-  return res.json();
+  return request(`/api/user/${userId}/rotate-key`, { method: 'POST' });
 }
 
 export async function addDevice(userId, deviceName) {
@@ -41,14 +49,10 @@ export async function addDevice(userId, deviceName) {
 }
 
 export async function rotateDeviceKey(userId, deviceId) {
-  const res = await fetch(`/api/user/${userId}/devices/${deviceId}/rotate`, { method: 'POST' });
-  if (!res.ok) throw new Error(`API error: ${res.status}`);
-  return res.json(); // { vless_link, client_uuid }
+  return request(`/api/user/${userId}/devices/${deviceId}/rotate`, { method: 'POST' });
 }
 
 //Bot name
 export async function fetchBotConfig() {
-  const res = await fetch('/api/config/bot');
-  if (!res.ok) throw new Error(`API error: ${res.status}`);
-  return res.json(); // { bot_name }
+  return request('/api/config');
 }
