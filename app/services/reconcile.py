@@ -3,12 +3,13 @@ Reconcile worker — синхронизация состояния девайс�
 
 Логика одного прохода:
 
-  1. Берём все is_active=True девайсы из БД.
+  1. Берём ВСЕ девайсы из БД (включая is_active=FALSE) через get_all_reconcile_devices.
+     Это позволяет поймать рассинхрон после частично проваленных операций billing/payments.
   2. Берём всех клиентов inbound из панели одним запросом.
   3. Для каждого девайса:
-     - отсутствует в панели + should_be_enabled  → создаём заново
-     - есть, выключён,  should_be_enabled         → enable=True
-     - есть, включён,  не should_be_enabled          → enable=False
+     - отсутствует в панели + should_be_enabled  → создаём заново + is_active=TRUE в БД
+     - есть, выключён,  should_be_enabled         → enable=True + is_active=TRUE в БД
+     - есть, включён,  не should_be_enabled        → enable=False (+ is_active уже FALSE или станет)
   4. Orphans (есть в панели, нет в БД) → отключаем (enable=False), логируем WARNING.
 
 Правила should_be_enabled:
@@ -45,7 +46,12 @@ from app.core.panel_client import (
     panel_request,
 )
 from app.core.vless import build_vless_link
-from app.db import get_all_active_devices, get_user_data_dict, update_device_link
+from app.db import (
+    get_all_reconcile_devices,
+    get_user_data_dict,
+    update_device_link,
+    activate_device,
+)
 from app.services.vpn import (
     _build_device_email,
     _build_client_settings,
@@ -116,6 +122,8 @@ async def _recreate_missing_client(
 
     new_link = build_vless_link(new_uuid, username)
     await update_device_link(dev["id"], user_id, new_uuid, new_link)
+    # Восстанавливаем is_active=TRUE в БД — панель уже включена
+    await activate_device(dev["id"], user_id)
 
     logger.warning(
         "reconcile.recreate.ok user_id=%s device=%s old_uuid=%s new_uuid=%s",
@@ -137,7 +145,9 @@ async def reconcile_once() -> None:
         logger.warning("reconcile.skip reason=panel_unavailable")
         return
 
-    db_devices = await get_all_active_devices()
+    # Берём ВСЕ девайсы — включая is_active=FALSE.
+    # Это позволяет поймать рассинхрон после аварийной деактивации.
+    db_devices = await get_all_reconcile_devices()
     db_uuids: set[str] = {d["client_uuid"] for d in db_devices}
 
     # Orphans: есть в панели, нет в БД → отключаем (enable=False).
@@ -174,6 +184,7 @@ async def reconcile_once() -> None:
         client_uuid = dev["client_uuid"]
         user_id = dev["user_id"]
         device_name = dev["device_name"]
+        db_is_active: bool = dev.get("is_active", False)
 
         user = await get_user_data_dict(user_id)
         if not user:
@@ -214,6 +225,7 @@ async def reconcile_once() -> None:
                         fixed += 1
                     else:
                         errors += 1
+                # should_be_enabled=False + не в панели = консистентно, ничего не делаем
 
             else:
                 panel_enabled: bool = panel_client.get("enable", False)
@@ -227,6 +239,13 @@ async def reconcile_once() -> None:
                             "reconcile.fixed_enable user_id=%s device=%s uuid=%s",
                             user_id, device_name, client_uuid,
                         )
+                        # Если БД была is_active=FALSE (billing упал на полпути) — чиним
+                        if not db_is_active:
+                            await activate_device(dev["id"], user_id)
+                            logger.warning(
+                                "reconcile.fixed_db_active user_id=%s device=%s uuid=%s",
+                                user_id, device_name, client_uuid,
+                            )
                         fixed += 1
                     else:
                         logger.error(
