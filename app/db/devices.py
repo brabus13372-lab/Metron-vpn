@@ -161,9 +161,8 @@ async def update_device_link(
 
 async def get_all_active_devices() -> List[Dict[str, Any]]:
     """
-    Возвращает все девайсы с is_active=True для reconcile-воркера.
-    Включает user_id для запроса данных пользователя без JOIN.
-    monthly_cost не конвертируется — reconcile работает с сырыми cents.
+    Возвращает только девайсы с is_active=True.
+    Используется там, где нужны исключительно реально активные записи.
     """
     async with get_db().connection() as conn:
         rows = await conn.fetch(
@@ -172,6 +171,32 @@ async def get_all_active_devices() -> List[Dict[str, Any]]:
                    is_active, disabled_at, disabled_reason
             FROM devices
             WHERE is_active = TRUE
+            ORDER BY user_id, id
+            """
+        )
+        return [dict(r) for r in rows]
+
+
+async def get_all_reconcile_devices() -> List[Dict[str, Any]]:
+    """
+    Возвращает все девайсы для reconcile-воркера, кроме явно удалённых логикой приложения.
+
+    Почему не только is_active=TRUE:
+    - если billing уже выставил is_active=FALSE в БД,
+      но операция в панели не завершилась/не синхронизировалась,
+      reconcile должен увидеть такую запись и довести состояние до консистентного;
+    - если после пополнения нужен автоматический recovery через reconcile,
+      устройство тоже должно попасть в выборку.
+
+    Устройства с disabled_reason='user_request' не исключаем — reconcile сам знает,
+    что их нельзя включать обратно и при необходимости выключит в панели.
+    """
+    async with get_db().connection() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id, user_id, device_name, client_uuid, vless_link,
+                   is_active, disabled_at, disabled_reason
+            FROM devices
             ORDER BY user_id, id
             """
         )
