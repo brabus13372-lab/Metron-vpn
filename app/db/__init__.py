@@ -32,6 +32,7 @@ from app.db.devices import (
     get_all_users_with_devices,
     get_user_total_monthly_cost,
     get_all_active_devices,
+    get_all_reconcile_devices,
 )
 from app.db.billing import (
     add_balance_atomic,
@@ -80,6 +81,7 @@ __all__ = [
     "get_all_users_with_devices",
     "get_user_total_monthly_cost",
     "get_all_active_devices",
+    "get_all_reconcile_devices",
     # billing
     "add_balance_atomic",
     "charge_balance_atomic",
