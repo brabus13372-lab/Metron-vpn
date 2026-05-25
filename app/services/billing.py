@@ -265,3 +265,7 @@ class BillingEngine:
         if self.scheduler.running:
             self.scheduler.shutdown(wait=False)
             logger.info("Billing engine stopped")
+
+
+# Синглтон — импортируется как `from app.services.billing import billing_engine`
+billing_engine = BillingEngine()
