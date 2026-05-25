@@ -271,7 +271,7 @@ async def hard_delete_device(user_id: int, device_id: int):
         client_uuid=device["client_uuid"],
         user_id=user_id,
     )
-     if not panel_ok:
+    if not panel_ok:
         logger.error(
             "hard_delete_device.panel_fail device_id=%s uuid=%s err=%s",
             device_id, device["client_uuid"], panel_err,
@@ -459,17 +459,17 @@ async def submit_support_ticket(
         files_info = ""
         if files_meta:
             names = ", ".join(f["name"] for f in files_meta)
-            files_info = f"\n📎 Файлы: {names}"
+            files_info = f"\n\U0001f4ce Файлы: {names}"
 
         notify_text = (
-            f"🆘 <b>Новое обращение</b> — через WebApp\n"
-            f"👤 @{html.escape(username)} (<code>{user_id}</code>)\n"
-            f"🎫 Тикет #{ticket_id}\n\n"
-            f"💬 {html.escape(message)}{files_info}"
+            f"\U0001f198 <b>Новое обращение</b> — через WebApp\n"
+            f"\U0001f464 @{html.escape(username)} (<code>{user_id}</code>)\n"
+            f"\U0001f3ab Тикет #{ticket_id}\n\n"
+            f"\U0001f4ac {html.escape(message)}{files_info}"
         )
 
         reply_kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✍️ Ответить", callback_data=f"reply_{user_id}")]
+            [InlineKeyboardButton(text="\u270d\ufe0f Ответить", callback_data=f"reply_{user_id}")]
         ])
 
         try:
