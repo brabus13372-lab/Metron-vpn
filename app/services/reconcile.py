@@ -9,7 +9,7 @@ Reconcile worker — синхронизация состояния девайс�
      - отсутствует в панели + should_be_enabled  → создаём заново
      - есть, выключён,  should_be_enabled         → enable=True
      - есть, включён,  не should_be_enabled          → enable=False
-  4. Orphans (есть в панели, нет в БД) → WARNING.
+  4. Orphans (есть в панели, нет в БД) → отключаем (enable=False), логируем WARNING.
 
 Правила should_be_enabled:
   - TRIAL   → True  (без проверки баланса)
@@ -140,14 +140,32 @@ async def reconcile_once() -> None:
     db_devices = await get_all_active_devices()
     db_uuids: set[str] = {d["client_uuid"] for d in db_devices}
 
-    # Orphans: есть в панели, нет в БД
+    # Orphans: есть в панели, нет в БД → отключаем (enable=False).
+    # Не удаляем — мог быть добавлен вручную, пусть админ разбирается по логам.
     orphan_uuids = set(panel_clients.keys()) - db_uuids
+    orphans_disabled = 0
     for orphan_uuid in orphan_uuids:
         c = panel_clients[orphan_uuid]
+        already_disabled = not c.get("enable", True)
         logger.warning(
             "reconcile.orphan uuid=%s email=%s enabled=%s",
             orphan_uuid, c.get("email"), c.get("enable"),
         )
+        if not already_disabled:
+            ok, msg = await update_client_fields(
+                orphan_uuid, {"enable": False}, inbound_id=INBOUND_ID
+            )
+            if ok:
+                logger.warning(
+                    "reconcile.orphan_disabled uuid=%s email=%s",
+                    orphan_uuid, c.get("email"),
+                )
+                orphans_disabled += 1
+            else:
+                logger.error(
+                    "reconcile.orphan_disable_fail uuid=%s email=%s msg=%s",
+                    orphan_uuid, c.get("email"), msg,
+                )
 
     fixed = 0
     errors = 0
@@ -242,8 +260,8 @@ async def reconcile_once() -> None:
             errors += 1
 
     logger.info(
-        "reconcile.done total_db=%s panel=%s orphans=%s fixed=%s errors=%s",
-        len(db_devices), len(panel_clients), len(orphan_uuids), fixed, errors,
+        "reconcile.done total_db=%s panel=%s orphans=%s orphans_disabled=%s fixed=%s errors=%s",
+        len(db_devices), len(panel_clients), len(orphan_uuids), orphans_disabled, fixed, errors,
     )
 
 
@@ -280,75 +298,80 @@ async def safe_rotate_device_key(
 ) -> tuple[str | None, str | None, str | None]:
     """
     Атомарная ротация UUID девайса:
-      1. Обновляем UUID в панели (old -> new)
-      2. Обновляем БД атомарно
-      3. Если БД упала — откатываем UUID в панели,
-         если откат тоже упал — кидаем RuntimeError.
+      1. Обновляем UUID и ключ в панели (новый клиент, старый удаляем).
+      2. Обновляем БД.
+      Если шаг 2 провалился — откатываем панель (восстанавливаем старый UUID).
 
-    Возвращает (new_link, new_uuid, error_message).
-    error_message=None означает успех.
+    Returns:
+        (new_vless_link, new_uuid, error_message)
+        error_message is None on success.
 
-    ВНИМАНИЕ: RuntimeError выбрасывается только при двойном сбое
-    (панель обновилась, БД упала, откат панели тоже упал).
-    Вызывающий код ДОЛЖЕН ловить его отдельно:
-
-        try:
-            new_link, new_uuid, err = await safe_rotate_device_key(...)
-        except RuntimeError as exc:
-            logger.critical("rotate_double_fail: %s", exc)
-            await message.answer("Критическая ошибка, обратитесь к администратору")
-            return
-        if err:
-            await message.answer("Не удалось обновить ключ, попробуй позже")
-            return
+    Raises:
+        RuntimeError — если и основная операция, и откат панели провалились.
+                       Вызывающий код обязан поймать это и сообщить пользователю.
     """
     new_uuid = str(uuid.uuid4())
+    email = _build_device_email(user_id, f"rotated_{device_id}", new_uuid)
 
-    # Шаг 1: обновляем в панели
-    ok, msg = await update_client_fields(
-        old_uuid,
-        {"id": new_uuid},
-        inbound_id=INBOUND_ID,
+    # --- Шаг 1: добавляем нового клиента в панель ---
+    client_settings = _build_client_settings(
+        client_uuid=new_uuid,
+        user_id=user_id,
+        email=email,
+        expiry_ts=_panel_expiry_ts_for_dynamic_access(),
+        enabled=True,
+        sub_id=_generate_sub_id(),
+        comment=f"Rotated device {device_id}",
     )
-    if not ok:
+    add_res = await panel_request(
+        "POST",
+        "/panel/api/inbounds/addClient",
+        data=_build_form_data(client_settings),
+    )
+    if not add_res.get("success"):
+        err = add_res.get("msg", "panel addClient failed")
         logger.error(
-            "safe_rotate.panel_fail device_id=%s old_uuid=%s msg=%s",
-            device_id, old_uuid, msg,
+            "safe_rotate.add_fail device_id=%s old_uuid=%s new_uuid=%s err=%s",
+            device_id, old_uuid, new_uuid, err,
         )
-        return None, None, f"Panel update failed: {msg}"
+        return None, None, err
 
+    # --- Шаг 2: обновляем БД ---
     new_link = build_vless_link(new_uuid, username)
-
-    # Шаг 2: обновляем БД
-    try:
-        await update_device_link(device_id, user_id, new_uuid, new_link)
-    except Exception as exc:
-        # БД не обновилась — откатываем UUID в панели
+    updated = await update_device_link(device_id, user_id, new_uuid, new_link)
+    if not updated:
+        # БД провалилась — откатываем панель
         logger.error(
-            "safe_rotate.db_fail device_id=%s new_uuid=%s exc=%s — rolling back panel",
-            device_id, new_uuid, exc,
+            "safe_rotate.db_fail device_id=%s new_uuid=%s — rolling back panel",
+            device_id, new_uuid,
         )
-        rollback_ok, rollback_msg = await update_client_fields(
-            new_uuid,
-            {"id": old_uuid},
-            inbound_id=INBOUND_ID,
+        del_res = await panel_request(
+            "POST",
+            f"/panel/api/inbounds/{INBOUND_ID}/delClient/{new_uuid}",
+            timeout=10,
         )
-        if not rollback_ok:
-            # Худший сценарий: панель поменяла UUID, БД нет, откат сфейлил.
-            # reconcile заметит рассинхрон на следующем цикле.
-            logger.critical(
-                "safe_rotate.rollback_fail device_id=%s new_uuid=%s rollback_msg=%s "
-                "INCONSISTENT STATE — requires manual intervention or reconcile",
-                device_id, new_uuid, rollback_msg,
-            )
+        if not del_res.get("success"):
             raise RuntimeError(
-                f"safe_rotate: panel rollback failed for device_id={device_id}, "
-                f"new_uuid={new_uuid}. Manual fix required."
+                f"safe_rotate: DB update failed AND panel rollback failed "
+                f"device_id={device_id} new_uuid={new_uuid} "
+                f"del_msg={del_res.get('msg')}"
             )
-        return None, None, f"DB write failed (panel rolled back): {exc}"
+        return None, None, "DB update failed (panel rolled back)"
+
+    # --- Шаг 3: удаляем старого клиента из панели ---
+    del_res = await panel_request(
+        "POST",
+        f"/panel/api/inbounds/{INBOUND_ID}/delClient/{old_uuid}",
+        timeout=10,
+    )
+    if not del_res.get("success") and "not found" not in str(del_res.get("msg", "")).lower():
+        logger.warning(
+            "safe_rotate.del_old_fail device_id=%s old_uuid=%s msg=%s — ignoring, new key is active",
+            device_id, old_uuid, del_res.get("msg"),
+        )
 
     logger.info(
-        "safe_rotate.ok device_id=%s user_id=%s old_uuid=%s new_uuid=%s",
-        device_id, user_id, old_uuid, new_uuid,
+        "safe_rotate.ok device_id=%s old_uuid=%s new_uuid=%s",
+        device_id, old_uuid, new_uuid,
     )
     return new_link, new_uuid, None
