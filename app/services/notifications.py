@@ -9,7 +9,10 @@ from app.db import get_db
 
 logger = logging.getLogger(__name__)
 
+# Уведомление за 2 дня до исчерпания баланса (повторное — критическое)
 LOW_BALANCE_DAYS_THRESHOLD = Decimal("2")
+# Уведомление за 5 дней (первое — раннее предупреждение)
+LOW_BALANCE_DAYS_THRESHOLD_EARLY = Decimal("5")
 DAYS_IN_MONTH = Decimal("30")
 
 
@@ -76,6 +79,25 @@ def _build_low_balance_message(
     )
 
 
+def _build_zero_balance_message(device_count: int, monthly_cost_cents: int) -> str:
+    return (
+        "❌ <b>Баланс исчерпан — VPN отключён.</b>\n\n"
+        f"Активных устройств: <b>{device_count}</b>\n"
+        f"Стоимость: <b>{_rub_text(monthly_cost_cents)} руб/мес</b>\n\n"
+        "Все ваши ключи приостановлены. Пополните баланс — доступ восстановится автоматически."
+    )
+
+
+def _build_reactivated_message(device_count: int, balance_cents: int, days_left: Decimal) -> str:
+    return (
+        "✅ <b>VPN снова активен!</b>\n\n"
+        f"Баланс пополнен: <b>{_rub_text(balance_cents)} ₽</b>\n"
+        f"Активных устройств: <b>{device_count}</b>\n"
+        f"Доступа хватит примерно на <b>{days_left:.1f}</b> дн.\n\n"
+        "Все ваши ключи восстановлены, можно подключаться 🚀"
+    )
+
+
 async def check_notifications(bot: Bot) -> None:
     try:
         now = datetime.now(timezone.utc)
@@ -107,8 +129,7 @@ async def _check_trial_expirations(bot: Bot, now: datetime, soon: datetime) -> N
               AND u.expire_at > $1
               AND u.expire_at <= $2
             GROUP BY u.user_id, u.expire_at
-            """
-            ,
+            """,
             now,
             soon,
         )
@@ -178,6 +199,7 @@ async def _check_low_balance(bot: Bot) -> None:
             device_count = row["device_count"] or 0
             monthly_cost_cents = row["monthly_cost_cents"] or 0
 
+            # Юзер без устройств — сбрасываем флаг и пропускаем
             if device_count <= 0 or monthly_cost_cents <= 0:
                 if low_balance_notified:
                     await conn.execute(
@@ -186,10 +208,34 @@ async def _check_low_balance(bot: Bot) -> None:
                     )
                 continue
 
-            days_left = _days_left(balance_cents, monthly_cost_cents)
-            should_notify = balance_cents > 0 and days_left <= LOW_BALANCE_DAYS_THRESHOLD
+            # ── Баг 1 fix: баланс = 0, ключи уже выключены ──────────────────
+            if balance_cents <= 0:
+                if not low_balance_notified:
+                    try:
+                        await bot.send_message(
+                            user_id,
+                            _build_zero_balance_message(device_count, monthly_cost_cents),
+                            reply_markup=_payment_keyboard(),
+                            parse_mode="HTML",
+                        )
+                        await conn.execute(
+                            "UPDATE users SET low_balance_notified = TRUE WHERE user_id = $1",
+                            user_id,
+                        )
+                        logger.info("notify_zero_balance.sent user_id=%s", user_id)
+                    except Exception as e:
+                        logger.error(
+                            "notify_zero_balance_failed user_id=%s err=%s",
+                            user_id,
+                            e,
+                            exc_info=True,
+                        )
+                continue
 
-            if not should_notify:
+            days_left = _days_left(balance_cents, monthly_cost_cents)
+
+            # ── Баланс восстановился выше порога — сброс флага ───────────────
+            if days_left > LOW_BALANCE_DAYS_THRESHOLD_EARLY:
                 if low_balance_notified:
                     await conn.execute(
                         "UPDATE users SET low_balance_notified = FALSE WHERE user_id = $1",
@@ -197,7 +243,10 @@ async def _check_low_balance(bot: Bot) -> None:
                     )
                 continue
 
-            if low_balance_notified:
+            # ── Раннее предупреждение (5 дней) или критическое (2 дня) ───────
+            # low_balance_notified=True значит уже отправляли — не спамим
+            should_notify = days_left <= LOW_BALANCE_DAYS_THRESHOLD_EARLY
+            if not should_notify or low_balance_notified:
                 continue
 
             try:
@@ -216,9 +265,77 @@ async def _check_low_balance(bot: Bot) -> None:
                     "UPDATE users SET low_balance_notified = TRUE WHERE user_id = $1",
                     user_id,
                 )
+                logger.info(
+                    "notify_low_balance.sent user_id=%s days_left=%s",
+                    user_id, days_left,
+                )
             except Exception as e:
                 logger.error(
                     "notify_low_balance_failed user_id=%s err=%s",
+                    user_id,
+                    e,
+                    exc_info=True,
+                )
+
+
+async def check_reactivation_notifications(bot: Bot) -> None:
+    """
+    Отправляет уведомление юзерам у которых:
+      - статус ACTIVE
+      - баланс > 0
+      - low_balance_notified = TRUE  (значит раньше гасили из-за нуля)
+      - есть активные устройства
+    Это значит — юзер пополнил баланс после отключения, ключи включились reconcile,
+    нужно сообщить об этом явно.
+    Сбрасывает low_balance_notified = FALSE после отправки.
+    """
+    db = get_db()
+
+    async with db.transaction() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT
+                u.user_id,
+                u.balance,
+                COUNT(d.id) FILTER (WHERE d.is_active = TRUE) AS device_count,
+                COALESCE(SUM(d.monthly_cost) FILTER (WHERE d.is_active = TRUE), 0) AS monthly_cost_cents
+            FROM users u
+            LEFT JOIN devices d ON d.user_id = u.user_id
+            WHERE u.status = 'ACTIVE'
+              AND u.balance > 0
+              AND u.low_balance_notified = TRUE
+            GROUP BY u.user_id, u.balance
+            HAVING COUNT(d.id) FILTER (WHERE d.is_active = TRUE) > 0
+            """
+        )
+
+        for row in rows:
+            user_id = row["user_id"]
+            balance_cents = row["balance"]
+            device_count = row["device_count"] or 0
+            monthly_cost_cents = row["monthly_cost_cents"] or 0
+
+            days_left = _days_left(balance_cents, monthly_cost_cents)
+
+            # Если баланс пополнили, но он всё ещё низкий (≤5 дней) — не шлём
+            # "всё ОК", иначе будет путаница (ключи включены, но деньги кончаются)
+            if days_left <= LOW_BALANCE_DAYS_THRESHOLD_EARLY:
+                continue
+
+            try:
+                await bot.send_message(
+                    user_id,
+                    _build_reactivated_message(device_count, balance_cents, days_left),
+                    parse_mode="HTML",
+                )
+                await conn.execute(
+                    "UPDATE users SET low_balance_notified = FALSE WHERE user_id = $1",
+                    user_id,
+                )
+                logger.info("notify_reactivated.sent user_id=%s", user_id)
+            except Exception as e:
+                logger.error(
+                    "notify_reactivated_failed user_id=%s err=%s",
                     user_id,
                     e,
                     exc_info=True,
