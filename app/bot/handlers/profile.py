@@ -167,34 +167,57 @@ async def process_device_name(message: types.Message, state: FSMContext):
     )
 
 
-@dp.callback_query(F.data.startswith("delete_device_confirm_"))
-async def cb_delete_device_confirm(callback: types.CallbackQuery):
+# Шаг 1: показываем кнопку подтверждения
+# callback_data: "device_delete_confirm_{id}"  — не пересекается с "device_delete_{id}"
+@dp.callback_query(F.data.startswith("device_delete_confirm_"))
+async def cb_device_delete_confirm(callback: types.CallbackQuery):
     device_id = int(callback.data.split("_")[-1])
     device = await get_device_by_id(device_id)
     if not device or device["user_id"] != callback.from_user.id:
         await callback.answer("❌ Устройство не найдено")
         return
     await callback.message.edit_text(
-        f"⚠️ Удалить <b>{html.escape(device['device_name'])}</b>?",
+        f"⚠️ Удалить <b>{html.escape(device['device_name'])}</b>?\n\n"
+        "Ключ будет удалён из панели и перестанет работать.",
         parse_mode="HTML",
         reply_markup=keyboards.build_confirm_delete_keyboard(device_id),
     )
     await callback.answer()
 
 
-@dp.callback_query(F.data.startswith("delete_device_"))
-async def cb_delete_device(callback: types.CallbackQuery):
+# Шаг 2: фактическое удаление
+# callback_data: "device_delete_{id}"
+@dp.callback_query(F.data.startswith("device_delete_") & ~F.data.startswith("device_delete_confirm_"))
+async def cb_device_delete(callback: types.CallbackQuery):
     device_id = int(callback.data.split("_")[-1])
     device = await get_device_by_id(device_id)
     if not device or device["user_id"] != callback.from_user.id:
         await callback.answer("❌ Устройство не найдено")
         return
+
     client_uuid = device.get("client_uuid")
-    if client_uuid:
+
+    # Удаляем из панели — только если клиент ещё активен (is_active=True)
+    if client_uuid and device.get("is_active"):
         ok, err = await remove_device_from_panel(client_uuid, callback.from_user.id)
         if not ok:
-            logger.warning("delete_device.panel_warn device_id=%s err=%s", device_id, err)
+            # Панель недоступна — не удаляем из БД, чтобы reconcile потом вычистил 
+            logger.error(
+                "delete_device.panel_fail device_id=%s uuid=%s err=%s",
+                device_id, client_uuid, err,
+            )
+            await callback.answer(
+                "❌ Ошибка панели — попробуйте позже",
+                show_alert=True,
+            )
+            return
+
+    # Хард делит из БД
     await delete_device(device_id)
+    logger.info(
+        "delete_device.done user_id=%s device_id=%s uuid=%s",
+        callback.from_user.id, device_id, client_uuid,
+    )
     await callback.message.edit_text(
         f"✅ Устройство <b>{html.escape(device['device_name'])}</b> удалено.\n\n"
         "Для управления устройствами используйте личный кабинет 👇",
