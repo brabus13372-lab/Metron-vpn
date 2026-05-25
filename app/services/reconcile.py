@@ -9,14 +9,25 @@ Reconcile worker — синхронизация состояния девайс�
      - отсутствует в панели + should_be_enabled  → создаём заново
      - есть, выключён,  should_be_enabled         → enable=True
      - есть, включён,  не should_be_enabled          → enable=False
-  4. Орфаны (есть в панели, нет в БД) → WARNING.
+  4. Orphans (есть в панели, нет в БД) → WARNING.
 
 Правила should_be_enabled:
   - TRIAL   → True  (без проверки баланса)
   - ACTIVE  → True  только если balance > 0
   - всё остальное (NEW / INACTIVE / EXPIRED) → False
   - disabled_reason='user_request' → False (всегда)
+
 Также содержит safe_rotate_device_key() с откатом панели при фейле БД.
+
+ВАЖНО: safe_rotate_device_key() кидает RuntimeError если откат панели тоже
+сфейлил. Вызывающий код (API-эндпоинт / хэндлер) ОБЯЗАН ловить это
+исключение и возвращать пользователю понятную ошибку, а не 500:
+
+    new_link, new_uuid, err = await safe_rotate_device_key(...)
+    if err:
+        await message.answer("Не удалось обновить ключ, попробуй позже")
+        return
+    # RuntimeError ловить выше через try/except или middleware
 """
 
 from __future__ import annotations
@@ -26,7 +37,7 @@ import logging
 import uuid
 from typing import Any
 
-from app.config import INBOUND_ID
+from app.config import INBOUND_ID, RECONCILE_INTERVAL_SEC
 from app.core.panel_client import (
     get_inbound,
     parse_inbound_settings,
@@ -44,8 +55,6 @@ from app.services.vpn import (
 )
 
 logger = logging.getLogger(__name__)
-
-RECONCILE_INTERVAL_SEC = 120
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +114,6 @@ async def _recreate_missing_client(
         )
         return False
 
-    # Панель приняла новый UUID — обновляем БД
     new_link = build_vless_link(new_uuid, username)
     await update_device_link(dev["id"], user_id, new_uuid, new_link)
 
@@ -132,7 +140,7 @@ async def reconcile_once() -> None:
     db_devices = await get_all_active_devices()
     db_uuids: set[str] = {d["client_uuid"] for d in db_devices}
 
-    # Орфаны: есть в панели, нет в БД
+    # Orphans: есть в панели, нет в БД
     orphan_uuids = set(panel_clients.keys()) - db_uuids
     for orphan_uuid in orphan_uuids:
         c = panel_clients[orphan_uuid]
@@ -246,6 +254,7 @@ async def reconcile_once() -> None:
 async def run_reconcile_loop() -> None:
     """
     Бесконечный цикл для asyncio.create_task().
+    Интервал читается из RECONCILE_INTERVAL_SEC (env).
     Первый проход через RECONCILE_INTERVAL_SEC сек после старта
     (чтобы не гнать панель при инициализации).
     """
@@ -274,9 +283,24 @@ async def safe_rotate_device_key(
       1. Обновляем UUID в панели (old -> new)
       2. Обновляем БД атомарно
       3. Если БД упала — откатываем UUID в панели,
-         если откат тоже упал — падаем с RuntimeError (reconcile починит).
+         если откат тоже упал — кидаем RuntimeError.
 
     Возвращает (new_link, new_uuid, error_message).
+    error_message=None означает успех.
+
+    ВНИМАНИЕ: RuntimeError выбрасывается только при двойном сбое
+    (панель обновилась, БД упала, откат панели тоже упал).
+    Вызывающий код ДОЛЖЕН ловить его отдельно:
+
+        try:
+            new_link, new_uuid, err = await safe_rotate_device_key(...)
+        except RuntimeError as exc:
+            logger.critical("rotate_double_fail: %s", exc)
+            await message.answer("Критическая ошибка, обратитесь к администратору")
+            return
+        if err:
+            await message.answer("Не удалось обновить ключ, попробуй позже")
+            return
     """
     new_uuid = str(uuid.uuid4())
 
@@ -299,7 +323,7 @@ async def safe_rotate_device_key(
     try:
         await update_device_link(device_id, user_id, new_uuid, new_link)
     except Exception as exc:
-        # БД не обновилась — пытаемся откатить UUID в панели
+        # БД не обновилась — откатываем UUID в панели
         logger.error(
             "safe_rotate.db_fail device_id=%s new_uuid=%s exc=%s — rolling back panel",
             device_id, new_uuid, exc,

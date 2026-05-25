@@ -38,3 +38,7 @@ TZ_NSK = ZoneInfo("Asia/Novosibirsk")
 TZ_MSK = ZoneInfo("Europe/Moscow")
 
 TRIAL_DAYS = int(os.getenv("TRIAL_DAYS", "1"))
+
+# --- RECONCILE ---
+# dev: 300 (5 мин), prod с большим парком: 900 (15 мин)
+RECONCILE_INTERVAL_SEC = int(os.getenv("RECONCILE_INTERVAL_SEC", "300"))
