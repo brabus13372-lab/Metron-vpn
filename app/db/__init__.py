@@ -45,6 +45,7 @@ from app.db.billing import (
 )
 from app.db.payments import (
     record_payment_idempotent,
+    apply_payment_topup_idempotent,
     get_payment_by_charge_ids,
 )
 from app.db.support import (
@@ -92,6 +93,7 @@ __all__ = [
     "set_user_balance",
     # payments
     "record_payment_idempotent",
+    "apply_payment_topup_idempotent",
     "get_payment_by_charge_ids",
     # support
     "create_ticket",

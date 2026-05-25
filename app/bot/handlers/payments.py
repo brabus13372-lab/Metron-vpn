@@ -11,7 +11,7 @@ from app.bot.keyboards import webapp_button
 from app.config import ADMIN_ID, PAY_TOKEN, PAYMENT_AMOUNTS, WEBAPP_URL
 from app.db import (
     activate_device,
-    add_balance_atomic,
+    apply_payment_topup_idempotent,
     ensure_user_stub,
     get_user_data_dict,
     get_user_devices,
@@ -225,7 +225,7 @@ async def success_payment(message: types.Message, bot: Bot) -> None:
         await _safe_alert_admin(bot, f"🚨 USER STUB FAIL {html.escape(str(e))}")
         return
 
-    # 2. Идемпотентная запись платежа
+    # 2. Идемпотентно сохраняем факт платежа
     try:
         payment_result = await record_payment_idempotent(
             user_id=user_id,
@@ -234,34 +234,27 @@ async def success_payment(message: types.Message, bot: Bot) -> None:
             provider_charge_id=payment.provider_payment_charge_id,
             amount_cents=amount_cents,
         )
-        if not payment_result["created"]:
-            logger.warning(
-                "Duplicate payment ignored user=%s provider_charge_id=%s",
-                user_id,
-                payment.provider_payment_charge_id,
-            )
-            return
     except Exception as e:
         logger.exception("Failed to save payment user=%s", user_id)
         await _safe_alert_admin(bot, f"🚨 PAYMENT SAVE FAIL {html.escape(str(e))}")
         return
 
-    # 3. Пополнение баланса
+    # 3. Применяем платёж к балансу ровно один раз.
+    # Повторный webhook не должен потерять уже сохранённый, но ещё не применённый платёж.
     try:
-        new_balance = await add_balance_atomic(
-            user_id=user_id,
-            amount_cents=amount_cents,
-            reference_type="payment",
-            reference_id=payment.provider_payment_charge_id,
-            idempotency_key=f"payment:{payment.provider_payment_charge_id}",
+        apply_result = await apply_payment_topup_idempotent(
+            payment_result["payment"]["id"],
         )
-        if new_balance is None:
-            logger.error("User not found during balance top-up user=%s", user_id)
-            await _safe_alert_admin(bot, f"🚨 USER NOT FOUND {user_id}")
-            return
+        new_balance = apply_result["balance"]
+        if apply_result["already_applied"]:
+            logger.info(
+                "Payment top-up already applied user=%s provider_charge_id=%s",
+                user_id,
+                payment.provider_payment_charge_id,
+            )
     except Exception as e:
-        logger.exception("Balance update failed user=%s", user_id)
-        await _safe_alert_admin(bot, f"🚨 DB ERROR {html.escape(str(e))}")
+        logger.exception("Balance apply failed user=%s", user_id)
+        await _safe_alert_admin(bot, f"🚨 PAYMENT APPLY FAIL {html.escape(str(e))}")
         return
 
     # 4. Получаем данные пользователя
