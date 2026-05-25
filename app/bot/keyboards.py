@@ -15,7 +15,6 @@ def main_kb(webapp_url: str, user_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-# Для inline-кнопок внутри отдельных хендлеров (детали устройства, подтверждение удаления)
 def build_devices_keyboard(devices: list) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for dev in devices:
@@ -36,7 +35,7 @@ def build_device_detail_keyboard(device_id: int) -> InlineKeyboardMarkup:
     builder.row(
         types.InlineKeyboardButton(
             text="🗑 Удалить устройство",
-            callback_data=f"delete_device_confirm_{device_id}",
+            callback_data=f"device_delete_confirm_{device_id}",
         )
     )
     builder.row(types.InlineKeyboardButton(text="◀️ Назад", callback_data="back"))
@@ -48,7 +47,7 @@ def build_confirm_delete_keyboard(device_id: int) -> InlineKeyboardMarkup:
     builder.row(
         types.InlineKeyboardButton(
             text="✅ Да, удалить",
-            callback_data=f"delete_device_{device_id}",
+            callback_data=f"device_delete_{device_id}",
         ),
         types.InlineKeyboardButton(text="❌ Отмена", callback_data="back"),
     )
