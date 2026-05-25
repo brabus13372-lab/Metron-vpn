@@ -90,13 +90,12 @@ async def start_cmd(message: types.Message, command: CommandObject) -> None:
 
     user = await get_user_data_dict(user_id)
     if not user:
-        empty_expire = datetime.now(timezone.utc)
         await save_user(
             user_id,
             username,
-            empty_expire,
-            vless_link="",
-            uuid_val="",
+            expire_at=datetime.now(timezone.utc),
+            vless_link=None,  # не пустая строка — иначе UNIQUE на uuid="" ломается
+            uuid_val=None,
             status="TRIAL",
         )
         logger.info("start_cmd.new_user user_id=%s", user_id)
