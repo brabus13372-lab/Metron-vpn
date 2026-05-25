@@ -243,9 +243,13 @@ async def delete_device(user_id: int, device_id: int):
             inbound_id=INBOUND_ID,
         )
         if not ok:
-            logger.warning(
+            logger.error(
                 "delete_device.panel_disable_fail device_id=%s uuid=%s msg=%s",
                 device_id, device["client_uuid"], msg,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=f"Panel error — device not disabled: {msg}",
             )
 
     ok = await deactivate_device(device_id, user_id, reason="user_request")
@@ -267,10 +271,14 @@ async def hard_delete_device(user_id: int, device_id: int):
         client_uuid=device["client_uuid"],
         user_id=user_id,
     )
-    if not panel_ok:
-        logger.warning(
+     if not panel_ok:
+        logger.error(
             "hard_delete_device.panel_fail device_id=%s uuid=%s err=%s",
             device_id, device["client_uuid"], panel_err,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"Panel error — device not deleted: {panel_err}",
         )
 
     deleted = await remove_device(device_id, user_id)
