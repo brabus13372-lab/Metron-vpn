@@ -215,14 +215,22 @@ class BillingEngine:
 
     async def _deactivate_all_user_devices(self, user_id: int) -> None:
         logger.info("billing.deactivate_devices.start user_id=%s", user_id)
+
         devices = await get_user_devices(user_id)
 
+        # Деактивируем только активные устройства, неактивные пропускаем
         for dev in devices:
-            await deactivate_device(dev["id"], user_id, reason="insufficient_funds")
+            if dev.get("is_active"):
+                await deactivate_device(dev["id"], user_id, reason="insufficient_funds")
 
         success_count, fail_count = await deactivate_all_user_devices(user_id)
+
+        # Меняем статус юзера: EXPIRED — деньги кончились, доступ отозван.
+        # payments.py вернёт статус в ACTIVE при следующем пополнении.
+        await update_user_status(user_id, "EXPIRED")
+
         logger.info(
-            "billing.deactivate_devices.done user_id=%s ok=%s fail=%s",
+            "billing.deactivate_devices.done user_id=%s ok=%s fail=%s status=EXPIRED",
             user_id, success_count, fail_count,
         )
 
@@ -255,8 +263,5 @@ class BillingEngine:
 
     def stop(self) -> None:
         if self.scheduler.running:
-            self.scheduler.shutdown()
+            self.scheduler.shutdown(wait=False)
             logger.info("Billing engine stopped")
-
-
-billing_engine = BillingEngine()
