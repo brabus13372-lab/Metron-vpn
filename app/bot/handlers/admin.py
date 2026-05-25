@@ -91,12 +91,6 @@ async def admin_give_balance(message: types.Message, bot: Bot) -> None:
 
     if inactive:
         success_count, fail_count, _ = await activate_all_user_devices(target_id)
-        async with get_db().connection() as conn:
-            await conn.execute(
-                """UPDATE devices SET is_active = true, disabled_at = NULL, disabled_reason = NULL
-                WHERE user_id = $1 AND disabled_reason = 'insufficient_funds'""",
-                target_id,
-            )
         logger.info(
             "admin_give_balance: reactivated devices user_id=%s ok=%s fail=%s",
             target_id, success_count, fail_count,

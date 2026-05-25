@@ -350,13 +350,10 @@ async def get_billing(user_id: int):
 # ---------------------------------------------------------------------------
 # Rotate key (account-level key — users.vless_link)
 #
-# GUARD: if the user already has ≥1 active device in `devices`,
-# we refuse to issue/rotate the account-level key. Every key must live in
-# `devices` so billing can see it. This eliminates the 100 ₽/mo leak where
-# a panel client was created here but never charged.
-#
-# The only legitimate use-case left for rotate-key is TRIAL first-activation
-# (user has no devices yet and wants their initial key).
+# GUARD: account-level key issuance is legacy and allowed only for TRIAL
+# first-activation. Every long-lived key must live in `devices` so billing can
+# see it. This eliminates the 100 ₽/mo leak where a panel client was created
+# here but never charged.
 # ---------------------------------------------------------------------------
 
 @app.post("/api/user/{user_id}/rotate-key", response_model=RotateKeyResponse, tags=["security"])
@@ -370,18 +367,23 @@ async def rotate_key(user_id: int):
             detail="Subscription is not active. Please top up your balance.",
         )
 
-    # Guard: block account-level key rotation when the user already has active
-    # devices.  Each key must be tracked in `devices` to be billed correctly.
-    # Direct the client to use per-device keys instead.
     devices = await get_user_devices(user_id)
-    active_devices = [d for d in devices if d.get("is_active")]
-    if active_devices:
+    if devices:
         raise HTTPException(
             status_code=409,
             detail=(
-                "You already have active devices. "
+                "You already have device records. "
                 "Use per-device keys from the Devices section. "
-                "The account-level key is only for first-time activation."
+                "The account-level key is only for first-time TRIAL activation."
+            ),
+        )
+
+    if status != "TRIAL":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "The account-level key is only available for first-time TRIAL activation. "
+                "Open the Devices section and create your first device instead."
             ),
         )
 

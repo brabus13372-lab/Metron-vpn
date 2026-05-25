@@ -15,7 +15,7 @@ from app.core.panel_client import (
     parse_inbound_settings,
     find_client_in_settings,
 )
-from app.db import get_user_devices
+from app.db import activate_device, get_user_devices
 
 logger = logging.getLogger(__name__)
 
@@ -247,12 +247,12 @@ async def remove_device_from_panel(client_uuid: str, user_id: int):
 
 async def activate_all_user_devices(user_id: int):
     """
-    Enables panel clients for the given user.
+    Enables panel clients for the given user and only marks successful rows
+    as active in the DB.
 
-    Only activates devices that were disabled by billing (disabled_reason='billing'
-    or disabled_reason=None for legacy rows). Devices disabled voluntarily by the
-    user (disabled_reason='user_request') are intentionally skipped — the user
-    chose to turn them off and that choice must be preserved after a topup.
+    Devices disabled voluntarily by the user (disabled_reason='user_request')
+    are intentionally skipped — the user chose to turn them off and that choice
+    must be preserved after a topup.
 
     Returns (success_count, fail_count, errors).
     """
@@ -283,6 +283,16 @@ async def activate_all_user_devices(user_id: int):
                 inbound_id=INBOUND_ID,
             )
             if ok:
+                db_updated = await activate_device(dev["id"], user_id)
+                if not db_updated:
+                    logger.error(
+                        "panel.activate_device.db_sync_fail user_id=%s device=%s uuid=%s reason=device_not_found",
+                        user_id, dev_name, client_uuid,
+                    )
+                    fail_count += 1
+                    errors.append((dev_name, "DB sync failed after panel activation"))
+                    continue
+
                 logger.info(
                     "panel.activate_device.success user_id=%s device=%s uuid=%s",
                     user_id, dev_name, client_uuid,

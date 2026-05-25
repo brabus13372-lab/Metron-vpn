@@ -15,9 +15,9 @@ from app.bot.keyboards import main_kb, webapp_button
 from app.db import (
     get_user_data_dict,
     get_user_balance,
+    get_user_devices,
     save_user,
 )
-from app.services.vpn import create_panel_client, activate_all_user_devices
 
 logger = logging.getLogger(__name__)
 
@@ -27,12 +27,25 @@ async def send_dynamic_instruction(
     user_id: int,
 ) -> None:
     user = await get_user_data_dict(user_id)
-    vless_link = user.get("vless_link") if user else None
+    devices = await get_user_devices(user_id)
+
+    # Device keys are the source of truth for billing. Fall back to the
+    # legacy account-level key only when the user has no device records yet.
+    active_device = next(
+        (dev for dev in devices if dev.get("is_active") and dev.get("vless_link")),
+        None,
+    )
+    if active_device:
+        vless_link = active_device["vless_link"]
+    elif not devices and user:
+        vless_link = user.get("vless_link")
+    else:
+        vless_link = None
 
     if not vless_link:
         msg = (
             "<b>⚠️ У вас ещё нет ключа.</b>\n"
-            "Откройте личный кабинет и нажмите «🚀 Подключить VPN», чтобы получить доступ."
+            "Откройте личный кабинет и добавьте первое устройство, чтобы получить доступ."
         )
         if isinstance(target, types.CallbackQuery):
             await target.message.answer(msg, parse_mode="HTML")

@@ -10,19 +10,14 @@ from app.bot.dispatcher import dp
 from app.bot.keyboards import webapp_button
 from app.config import ADMIN_ID, PAY_TOKEN, PAYMENT_AMOUNTS, WEBAPP_URL
 from app.db import (
-    activate_device,
     apply_payment_topup_idempotent,
     ensure_user_stub,
     get_user_data_dict,
     get_user_devices,
     record_payment_idempotent,
-    save_paid_access,
     update_user_status,
 )
-from app.services.vpn import (
-    activate_all_user_devices,
-    create_panel_client,
-)
+from app.services.vpn import activate_all_user_devices
 
 logger = logging.getLogger(__name__)
 
@@ -72,14 +67,16 @@ def _validate_payment(payment: types.SuccessfulPayment, user_id: int) -> bool:
 
 async def _execute_activation(user_id: int, bot: Bot) -> None:
     """
-    Активирует устройства в панели и синхронизирует is_active в БД.
+    Активирует устройства в панели.
 
-    Устройства с disabled_reason='user_request' пропускаются как в панели, так и в БД —
+    Устройства с disabled_reason='user_request' пропускаются —
     выбор пользователя сохраняется после пополнения баланса.
+    Синхронизация is_active выполняется внутри service-слоя только
+    для реально успешно активированных устройств.
     """
     try:
         success, failed, errors = await activate_all_user_devices(user_id)
-        if success == 0 and failed > 0:
+        if failed > 0:
             await _safe_alert_admin(
                 bot,
                 f"🚨 Activation failed user={user_id} errors={html.escape(str(errors[:3]))}",
@@ -90,26 +87,6 @@ async def _execute_activation(user_id: int, bot: Bot) -> None:
             f"🚨 CRITICAL activation error user={user_id}: {html.escape(str(e))}",
         )
         return
-
-    try:
-        devices = await get_user_devices(user_id)
-        for dev in devices:
-            # Do NOT re-enable devices the user explicitly disabled.
-            # activate_all_user_devices already skipped them in the panel;
-            # here we mirror that logic so the DB stays consistent.
-            if dev.get("disabled_reason") == "user_request":
-                logger.info(
-                    "_execute_activation.skip_db user_id=%s device=%s reason=user_request",
-                    user_id, dev["device_name"],
-                )
-                continue
-            await activate_device(dev["id"], user_id)
-    except Exception as e:
-        logger.exception("Failed to sync is_active after activation user=%s", user_id)
-        await _safe_alert_admin(
-            bot,
-            f"🚨 DB SYNC FAIL after activation user={user_id}: {html.escape(str(e))}",
-        )
 
 
 @dp.callback_query(F.data == "buy_vpn")
@@ -188,6 +165,12 @@ async def pre_checkout(q: types.PreCheckoutQuery, bot: Bot) -> None:
     if q.total_amount != expected_amount:
         await bot.answer_pre_checkout_query(
             q.id, ok=False, error_message="Неверная сумма платежа"
+        )
+        return
+
+    if q.total_amount not in PAYMENT_AMOUNTS:
+        await bot.answer_pre_checkout_query(
+            q.id, ok=False, error_message="Недопустимая сумма платежа"
         )
         return
 
@@ -270,56 +253,72 @@ async def success_payment(message: types.Message, bot: Bot) -> None:
         await _safe_alert_admin(bot, f"🚨 USER DATA MISSING {user_id}")
         return
 
-    username = (user_data.get("username") or f"user_{user_id}")[:32]
-    vless_link = user_data.get("vless_link")
-    uuid = user_data.get("uuid")
+    legacy_account_uuid = user_data.get("uuid")
     current_status = user_data.get("status", "NEW")
 
-    # 5. Создаём основной ключ если его ещё нет
+    # 5. Оплата не должна создавать account-level ключ вне `devices`:
+    # биллинг считает только `devices`, а users.vless_link/users.uuid — это
+    # исторический легаси-путь, который даёт небиллируемый доступ.
     try:
-        if not vless_link or not uuid:
-            vless_link, uuid, err = await create_panel_client(
-                user_id=user_id,
-                username=username,
-            )
-            if not vless_link or not uuid:
-                raise RuntimeError(err or "create_panel_client returned empty result")
-            await save_paid_access(
-                user_id=user_id,
-                username=username,
-                vless_link=vless_link,
-                uuid_val=uuid,
-            )
-        elif current_status not in ("ACTIVE", "TRIAL"):
+        if current_status not in ("ACTIVE", "TRIAL"):
             await update_user_status(user_id, "ACTIVE")
     except Exception as e:
-        logger.exception("VPN/user sync failed user=%s", user_id)
+        logger.exception("User status sync failed after payment user=%s", user_id)
         await _safe_alert_admin(
             bot,
-            f"🚨 VPN/SAVE FAIL user={user_id} err={html.escape(str(e))}",
+            f"🚨 USER STATUS FAIL user={user_id} err={html.escape(str(e))}",
         )
         await message.answer(
-            "⚠️ Оплата прошла, баланс пополнен, но при выдаче доступа произошла ошибка. Мы уже разберёмся.",
+            "⚠️ Оплата прошла, баланс пополнен, но при обновлении статуса произошла ошибка. Мы уже разберёмся.",
             disable_web_page_preview=True,
         )
         return
 
+    try:
+        devices = await get_user_devices(user_id)
+    except Exception as e:
+        logger.exception("Failed to fetch devices after payment user=%s", user_id)
+        await _safe_alert_admin(bot, f"🚨 DEVICE LIST FAIL user={user_id} err={html.escape(str(e))}")
+        return
+
     # 6. Активируем устройства в панели
-    await _execute_activation(user_id, bot)
+    if devices:
+        await _execute_activation(user_id, bot)
+    elif legacy_account_uuid:
+        logger.warning(
+            "Payment completed for legacy account-level access user=%s uuid=%s without billable devices",
+            user_id,
+            legacy_account_uuid,
+        )
+        await _safe_alert_admin(
+            bot,
+            f"⚠️ Payment OK but user={user_id} still has legacy account key without billable devices",
+        )
 
     # 7. Отправляем подтверждение — только WebApp кнопка
+    if devices:
+        user_text = (
+            "🎉 <b>Оплата прошла успешно!</b>\n"
+            f"<b>💰 Баланс:</b> {new_balance:.2f} ₽\n"
+            "Устройства повторно активированы. Откройте личный кабинет для управления доступом:"
+        )
+    else:
+        user_text = (
+            "🎉 <b>Оплата прошла успешно!</b>\n"
+            f"<b>💰 Баланс:</b> {new_balance:.2f} ₽\n"
+            "Чтобы получить VPN-доступ, откройте личный кабинет и добавьте первое устройство."
+        )
+
     await message.answer(
-        "🎉 <b>Оплата прошла успешно!</b>\n"
-        f"<b>💰 Баланс:</b> {new_balance:.2f} ₽\n"
-        "Доступ активирован. Откройте личный кабинет для управления устройствами:",
+        user_text,
         parse_mode="HTML",
         reply_markup=webapp_button(WEBAPP_URL, user_id),
         disable_web_page_preview=True,
     )
 
     logger.info(
-        "PAYMENT SUCCESS user=%s amount_cents=%s balance=%s",
-        user_id, amount_cents, new_balance,
+        "PAYMENT SUCCESS user=%s amount_cents=%s balance=%s devices=%s legacy_account_key=%s",
+        user_id, amount_cents, new_balance, len(devices), bool(legacy_account_uuid),
     )
 
     await _safe_alert_admin(

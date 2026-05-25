@@ -216,15 +216,20 @@ async def reconcile_once() -> None:
 
         try:
             if panel_client is None:
-                logger.warning(
-                    "reconcile.missing user_id=%s device=%s uuid=%s should_enabled=%s",
-                    user_id, device_name, client_uuid, should_be_enabled,
-                )
                 if should_be_enabled:
+                    logger.warning(
+                        "reconcile.missing user_id=%s device=%s uuid=%s should_enabled=%s",
+                        user_id, device_name, client_uuid, should_be_enabled,
+                    )
                     if await _recreate_missing_client(dev, user_id, username):
                         fixed += 1
                     else:
                         errors += 1
+                else:
+                    logger.info(
+                        "reconcile.missing_inactive_ok user_id=%s device=%s uuid=%s",
+                        user_id, device_name, client_uuid,
+                    )
                 # should_be_enabled=False + не в панели = консистентно, ничего не делаем
 
             else:
