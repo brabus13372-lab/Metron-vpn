@@ -159,6 +159,25 @@ async def update_device_link(
         return result != "UPDATE 0"
 
 
+async def get_all_active_devices() -> List[Dict[str, Any]]:
+    """
+    Возвращает все девайсы с is_active=True для reconcile-воркера.
+    Включает user_id для запроса данных пользователя без JOIN.
+    monthly_cost не конвертируется — reconcile работает с сырыми cents.
+    """
+    async with get_db().connection() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id, user_id, device_name, client_uuid, vless_link,
+                   is_active, disabled_at, disabled_reason
+            FROM devices
+            WHERE is_active = TRUE
+            ORDER BY user_id, id
+            """
+        )
+        return [dict(r) for r in rows]
+
+
 async def get_all_users_with_devices() -> List[int]:
     async with get_db().connection() as conn:
         rows = await conn.fetch(

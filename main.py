@@ -5,6 +5,7 @@ if __name__ == "__main__":
     import sys
 
     from app.services.billing import billing_engine
+    from app.services.reconcile import run_reconcile_loop
     import app.core.panel_client as panel_client
 
     import uvicorn
@@ -22,7 +23,7 @@ if __name__ == "__main__":
     ensure_sanitized_logging()
 
     from app.bot.dispatcher import dp
-    from app.bot.bot import bot          # ← синглтон, один на всё приложение
+    from app.bot.bot import bot
     from app.config import ADMIN_ID, BOT_TOKEN, VLESS_SID
     from app.db import init_db, close_db
     from app.services.notifications import check_notifications
@@ -61,6 +62,10 @@ if __name__ == "__main__":
         billing_engine.set_bot(bot)
         billing_engine.start()
 
+        # Reconcile worker: сверяет БД ↔ панель каждые %d сек.
+        reconcile_task = asyncio.create_task(run_reconcile_loop())
+        reconcile_task.add_done_callback(_log_task_exception)
+
         api_server = uvicorn.Server(uvicorn.Config(
             fastapi_app,
             host="0.0.0.0",
@@ -78,6 +83,7 @@ if __name__ == "__main__":
         finally:
             logging.info("Начинаем graceful shutdown...")
             billing_engine.stop()
+            reconcile_task.cancel()
             await bot.session.close()
             await panel_client.close_panel_session()
             if scheduler.running:

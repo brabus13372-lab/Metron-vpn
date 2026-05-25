@@ -3,16 +3,20 @@ Reconcile worker — синхронизация состояния девайс�
 
 Логика одного прохода:
 
-1. Берём все девайсы из БД (is_active=True).
-2. Берём все клиенты из панели одним запросом в get_inbound.
-3. Для каждого девайса:
-   - если клиент отсутствует в панели → создаём заново
-   - если клиент есть но выключен, а должен быть включён → включаем
-   - если клиент есть и включён, а должен быть выключен (balance=0) → выключаем
-4. Орфаны в панели (есть в панели, нет в БД) → WARNING в лог.
+  1. Берём все is_active=True девайсы из БД.
+  2. Берём всех клиентов inbound из панели одним запросом.
+  3. Для каждого девайса:
+     - отсутствует в панели + should_be_enabled  → создаём заново
+     - есть, выключён,  should_be_enabled         → enable=True
+     - есть, включён,  не should_be_enabled          → enable=False
+  4. Орфаны (есть в панели, нет в БД) → WARNING.
 
-Также содержит:
-- safe_rotate_device_key(): корректная ротация UUID девайса с откатом.
+Правила should_be_enabled:
+  - TRIAL   → True  (без проверки баланса)
+  - ACTIVE  → True  только если balance > 0
+  - всё остальное (NEW / INACTIVE / EXPIRED) → False
+  - disabled_reason='user_request' → False (всегда)
+Также содержит safe_rotate_device_key() с откатом панели при фейле БД.
 """
 
 from __future__ import annotations
@@ -41,7 +45,6 @@ from app.services.vpn import (
 
 logger = logging.getLogger(__name__)
 
-# Интервал между проходами в секундах
 RECONCILE_INTERVAL_SEC = 120
 
 
@@ -50,15 +53,11 @@ RECONCILE_INTERVAL_SEC = 120
 # ---------------------------------------------------------------------------
 
 async def _fetch_panel_clients() -> dict[str, dict[str, Any]]:
-    """
-    Возвращает {client_uuid: client_dict} для всех клиентов из inbound.
-    При ошибке возвращает пустой словарь (reconcile пропустит цикл).
-    """
+    """Возвращает {client_uuid: client_dict}. При ошибке → пустой словарь."""
     inbound = await get_inbound(INBOUND_ID)
     if not inbound:
         logger.error("reconcile.fetch_panel.fail inbound_id=%s", INBOUND_ID)
         return {}
-
     settings = parse_inbound_settings(inbound)
     clients: list[dict] = settings.get("clients", [])
     return {c["id"]: c for c in clients if c.get("id")}
@@ -72,10 +71,11 @@ async def _recreate_missing_client(
     dev: dict[str, Any],
     user_id: int,
     username: str,
-) -> None:
+) -> bool:
     """
     Клиент есть в БД, но отсутствует в панели.
     Создаём новый клиент с новым UUID и обновляем БД.
+    Возвращает True при успехе, False при ошибке.
     """
     old_uuid = dev["client_uuid"]
     device_name = dev["device_name"]
@@ -103,16 +103,17 @@ async def _recreate_missing_client(
             "reconcile.recreate.fail user_id=%s device=%s old_uuid=%s msg=%s",
             user_id, device_name, old_uuid, res.get("msg"),
         )
-        return
+        return False
 
     # Панель приняла новый UUID — обновляем БД
     new_link = build_vless_link(new_uuid, username)
-    await update_device_link(dev["id"], new_uuid, new_link)
+    await update_device_link(dev["id"], user_id, new_uuid, new_link)
 
     logger.warning(
         "reconcile.recreate.ok user_id=%s device=%s old_uuid=%s new_uuid=%s",
         user_id, device_name, old_uuid, new_uuid,
     )
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -120,22 +121,18 @@ async def _recreate_missing_client(
 # ---------------------------------------------------------------------------
 
 async def reconcile_once() -> None:
-    """
-    Запускает одинцикл сверки БД ↔ панель.
-    """
+    """One reconcile pass: compare DB devices against panel state and fix drift."""
     logger.info("reconcile.start")
 
-    # 1. Собираем данные
     panel_clients = await _fetch_panel_clients()
     if not panel_clients:
-        # Панель недоступна — пропускаем цикл, не портим БД
         logger.warning("reconcile.skip reason=panel_unavailable")
         return
 
     db_devices = await get_all_active_devices()
     db_uuids: set[str] = {d["client_uuid"] for d in db_devices}
 
-    # 2. Орфаны в панели
+    # Орфаны: есть в панели, нет в БД
     orphan_uuids = set(panel_clients.keys()) - db_uuids
     for orphan_uuid in orphan_uuids:
         c = panel_clients[orphan_uuid]
@@ -144,7 +141,6 @@ async def reconcile_once() -> None:
             orphan_uuid, c.get("email"), c.get("enable"),
         )
 
-    # 3. Проверяем каждый активный девайс из БД
     fixed = 0
     errors = 0
 
@@ -153,7 +149,6 @@ async def reconcile_once() -> None:
         user_id = dev["user_id"]
         device_name = dev["device_name"]
 
-        # Получаем данные пользователя для определения желаемого состояния
         user = await get_user_data_dict(user_id)
         if not user:
             logger.warning(
@@ -163,36 +158,41 @@ async def reconcile_once() -> None:
             continue
 
         username = user.get("username") or f"user_{user_id}"
-        user_balance: int = user.get("balance", 0)  # cents
+        user_balance: int = user.get("balance", 0)   # cents, raw
         user_status: str = user.get("status", "INACTIVE")
+        manual_off: bool = dev.get("disabled_reason") == "user_request"
 
-        # Должен ли клиент быть включён:
-        # - статус ACTIVE и баланс > 0
-        # - девайс не выключен вручную (user_request)
+        # Правила включения/выключения:
+        #   TRIAL   — всегда включён, баланс не имеет значения
+        #   ACTIVE  — включён только если есть баланс
+        #   остальное (NEW / INACTIVE / EXPIRED) — выключен
+        #   любой disabled_reason='user_request' — выключен без вариантов
         should_be_enabled = (
-            user_status == "ACTIVE"
-            and user_balance > 0
-            and dev.get("disabled_reason") != "user_request"
+            not manual_off
+            and (
+                user_status == "TRIAL"
+                or (user_status == "ACTIVE" and user_balance > 0)
+            )
         )
 
         panel_client = panel_clients.get(client_uuid)
 
         try:
             if panel_client is None:
-                # Клиент есть в БД но отсутствует в панели
                 logger.warning(
                     "reconcile.missing user_id=%s device=%s uuid=%s should_enabled=%s",
                     user_id, device_name, client_uuid, should_be_enabled,
                 )
                 if should_be_enabled:
-                    await _recreate_missing_client(dev, user_id, username)
-                    fixed += 1
+                    if await _recreate_missing_client(dev, user_id, username):
+                        fixed += 1
+                    else:
+                        errors += 1
 
             else:
                 panel_enabled: bool = panel_client.get("enable", False)
 
                 if should_be_enabled and not panel_enabled:
-                    # Должен быть включён, но выключен
                     ok, msg = await update_client_fields(
                         client_uuid, {"enable": True}, inbound_id=INBOUND_ID
                     )
@@ -210,7 +210,6 @@ async def reconcile_once() -> None:
                         errors += 1
 
                 elif not should_be_enabled and panel_enabled:
-                    # Должен быть выключен, но включён
                     ok, msg = await update_client_fields(
                         client_uuid, {"enable": False}, inbound_id=INBOUND_ID
                     )
@@ -246,19 +245,16 @@ async def reconcile_once() -> None:
 
 async def run_reconcile_loop() -> None:
     """
-    Бесконечный цикл для запуска через asyncio.create_task().
-    Первый проход запускается через RECONCILE_INTERVAL_SEC после старта
+    Бесконечный цикл для asyncio.create_task().
+    Первый проход через RECONCILE_INTERVAL_SEC сек после старта
     (чтобы не гнать панель при инициализации).
     """
-    logger.info(
-        "reconcile_loop.start interval=%ss", RECONCILE_INTERVAL_SEC
-    )
+    logger.info("reconcile_loop.start interval=%ss", RECONCILE_INTERVAL_SEC)
     while True:
         await asyncio.sleep(RECONCILE_INTERVAL_SEC)
         try:
             await reconcile_once()
         except Exception:
-            # Никогда не даём воркеру умереть — логируем и продолжаем
             logger.exception("reconcile_loop.unhandled_exception")
 
 
@@ -271,13 +267,14 @@ async def safe_rotate_device_key(
     old_uuid: str,
     user_id: int,
     username: str,
-    device_name: str,
+    device_name: str,  # noqa: ARG001 — оставляем для будущего логирования
 ) -> tuple[str | None, str | None, str | None]:
     """
     Атомарная ротация UUID девайса:
       1. Обновляем UUID в панели (old -> new)
       2. Обновляем БД атомарно
-      3. Если БД не успела — откатываем UUID обратно в панели
+      3. Если БД упала — откатываем UUID в панели,
+         если откат тоже упал — падаем с RuntimeError (reconcile починит).
 
     Возвращает (new_link, new_uuid, error_message).
     """
@@ -300,9 +297,9 @@ async def safe_rotate_device_key(
 
     # Шаг 2: обновляем БД
     try:
-        await update_device_link(device_id, new_uuid, new_link)
+        await update_device_link(device_id, user_id, new_uuid, new_link)
     except Exception as exc:
-        # БД не обновилась — откатываем UUID в панели
+        # БД не обновилась — пытаемся откатить UUID в панели
         logger.error(
             "safe_rotate.db_fail device_id=%s new_uuid=%s exc=%s — rolling back panel",
             device_id, new_uuid, exc,
@@ -313,14 +310,18 @@ async def safe_rotate_device_key(
             inbound_id=INBOUND_ID,
         )
         if not rollback_ok:
-            # Худший случай: панель поменяла UUID, БД нет, откат сфейлил
-            # reconcile поправит на следующем цикле
+            # Худший сценарий: панель поменяла UUID, БД нет, откат сфейлил.
+            # reconcile заметит рассинхрон на следующем цикле.
             logger.critical(
                 "safe_rotate.rollback_fail device_id=%s new_uuid=%s rollback_msg=%s "
-                "INCONSISTENT STATE — reconcile will fix on next cycle",
+                "INCONSISTENT STATE — requires manual intervention or reconcile",
                 device_id, new_uuid, rollback_msg,
             )
-        return None, None, f"DB write failed: {exc}"
+            raise RuntimeError(
+                f"safe_rotate: panel rollback failed for device_id={device_id}, "
+                f"new_uuid={new_uuid}. Manual fix required."
+            )
+        return None, None, f"DB write failed (panel rolled back): {exc}"
 
     logger.info(
         "safe_rotate.ok device_id=%s user_id=%s old_uuid=%s new_uuid=%s",
