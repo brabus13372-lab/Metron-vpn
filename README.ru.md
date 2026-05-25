@@ -40,21 +40,23 @@ Metron-vpn/
 ├── main.py                          # Entrypoint: uvicorn + aiogram long-polling
 │
 ├── app/
-│   ├── config.py                    # dotenv → константы (BOT_TOKEN, PANEL_URL, …)
-│   ├── api.py                       # FastAPI: все REST-эндпоинты WebApp
-│   ├── db.py                        # asyncpg: все SQL-запросы
-│   ├── schemas.py                   # Pydantic v2 модели запросов / ответов
-│   ├── vless.py                     # Сборка VLESS-ссылки из компонентов
-│   ├── logging_sanitizer.py         # Глобальный фильтр логов (маскирует токены/куки)
-│   │
 │   ├── core/
-│   │   └── panel_client.py          # aiohttp-клиент для 3x-ui REST API (login, CRUD)
-│   │
+│   │   ├── panel_client.py          # aiohttp-клиент для 3x-ui REST API
+│   │   ├── logging_sanitizer.py     # Глобальный фильтр логов (маскирует токены/куки)
+│   │   └── vless.py                 # Сборка VLESS-ссылки
+│   ├── db/
+│   │   ├── core.py                  # asyncpg pool + проверка схемы
+│   │   ├── users.py                 # запросы пользователей
+│   │   ├── devices.py               # запросы устройств
+│   │   ├── billing.py               # запросы баланса и биллинга
+│   │   └── payments.py              # идемпотентные запросы платежей
+│   ├── schemas/
+│   │   └── user.py                  # Pydantic-модели запросов / ответов
 │   ├── services/
 │   │   ├── billing.py               # BillingEngine: ежедневное списание + TRIAL-цикл
-│   │   ├── vpn.py                   # Бизнес-логика: rotate_user_key, add_device_to_panel
-│   │   └── notifications.py         # APScheduler: напоминания об истечении подписки
-│   │
+│   │   ├── notifications.py         # APScheduler: напоминания по подписке
+│   │   ├── reconcile.py             # Воркер сверки БД ↔ панель
+│   │   └── vpn.py                   # Бизнес-логика панели и устройств
 │   └── bot/
 │       ├── bot.py                   # Экземпляр aiogram Bot
 │       ├── dispatcher.py            # Dispatcher + регистрация хэндлеров
@@ -67,10 +69,32 @@ Metron-vpn/
 │           └── admin.py             # Админ-команды: рассылка, статистика
 │
 ├── webapp/                          # Telegram WebApp (статика, отдаётся FastAPI)
-│   └── index.html                   # SPA: профиль, устройства, биллинг, поддержка
+│   ├── index.html                   # Redirect-entry с сохранением query string
+│   ├── pages/
+│   │   ├── profile.html             # Основная страница профиля/устройств/биллинга
+│   │   ├── support.html             # Форма поддержки и история тикетов
+│   │   └── protocols.html           # Статическая страница с протоколами
+│   ├── assets/
+│   │   ├── css/
+│   │   │   ├── base.css
+│   │   │   ├── components.css
+│   │   │   ├── animations.css
+│   │   │   └── pages/               # Вынесенные page-specific стили
+│   │   └── js/
+│   │       ├── api.js               # Общий API-клиент WebApp
+│   │       └── pages/               # Вынесенные page-specific скрипты
+│   └── legacy/
+│       └── assets/js/               # Архив устаревших WebApp-модулей
 │
-├── migrate_db.py                    # Одноразовая миграция SQLite → PostgreSQL
-├── cleanup_orphan_keys.py           # ⚠️  Сервисный скрипт: чистка orphan-клиентов
+├── scripts/
+│   ├── maintenance/
+│   │   └── cleanup_orphan_keys.py   # Каноническая очистка orphan account-key
+│   └── migrations/
+│       └── migrate_db.py            # Каноническая миграция SQLite → PostgreSQL
+├── cleanup_orphan_keys.py           # Backward-compatible wrapper
+├── migrate_db.py                    # Backward-compatible wrapper
+├── migrations/                      # Alembic env + versions
+├── alembic.ini
 ├── requirements.txt
 ├── .env.example
 └── .gitignore
@@ -79,6 +103,13 @@ Metron-vpn/
 **Потоки данных:**
 - `Telegram → aiogram handlers → services → db / panel_client`
 - `WebApp → FastAPI (api.py) → db / panel_client → 3x-ui`
+
+**Стабильные продовые entrypoints:**
+- `main.py` — точка входа сервиса для `systemd`
+- `app/` — Python import root
+- `webapp/` — static root, смонтированный FastAPI
+- `migrations/` + `alembic.ini` — runtime-root для Alembic
+- Root-wrapper'ы `cleanup_orphan_keys.py` и `migrate_db.py` остаются поддерживаемыми для операторского удобства
 
 ---
 
@@ -245,7 +276,7 @@ WebApp взаимодействует с ботом через REST API (`app/ap
 
 | Эндпоинт | Код | Условие |
 |---|---|---|
-| `POST /rotate-key` | `409` | У пользователя есть активные devices |
+| `POST /rotate-key` | `409` | У пользователя уже есть записи в `devices` |
 | `DELETE /devices/{id}` | `409` | Удаляется последнее активное устройство |
 | `POST /devices` | `403` | Статус пользователя не `ACTIVE` / `TRIAL` |
 
@@ -268,11 +299,19 @@ WebApp взаимодействует с ботом через REST API (`app/ap
 > ⚠️ Перед `--apply` — обязательно проверь список через `--dry-run`.
 
 ```bash
-# Dry-run: показать что будет удалено (ничего не меняет)
+# Dry-run: показать что будет удалено (ничего не меняет).
+# Backward-compatible root-wrapper:
 export $(grep -v '^#' .env | xargs) && python cleanup_orphan_keys.py --dry-run
 
-# Apply: применить очистку
+# Канонический путь скрипта:
+export $(grep -v '^#' .env | xargs) && .venv/bin/python -m scripts.maintenance.cleanup_orphan_keys --dry-run
+
+# Apply: применить очистку.
+# Backward-compatible root-wrapper:
 export $(grep -v '^#' .env | xargs) && python cleanup_orphan_keys.py --apply
+
+# Канонический путь скрипта:
+export $(grep -v '^#' .env | xargs) && .venv/bin/python -m scripts.maintenance.cleanup_orphan_keys --apply
 ```
 
 Скрипт **идемпотентен** — повторный запуск безопасен. Если панель недоступна для какого-то UUID — БД не трогается, пользователь появится снова при следующем запуске.
@@ -280,6 +319,10 @@ export $(grep -v '^#' .env | xargs) && python cleanup_orphan_keys.py --apply
 ### `migrate_db.py`
 
 Одноразовая миграция данных SQLite → PostgreSQL (использовалась при переходе на prod-базу). Для новых установок не нужен.
+
+Каноническая реализация: `.venv/bin/python -m scripts.migrations.migrate_db`
+
+Backward-compatible wrapper: `python migrate_db.py`
 
 ---
 
@@ -299,8 +342,8 @@ export $(grep -v '^#' .env | xargs) && python cleanup_orphan_keys.py --apply
 ### Добавить API эндпоинт
 
 1. Добавь эндпоинт в `app/api.py`
-2. Добавь Pydantic-схемы в `app/schemas.py`
-3. SQL-запросы — только в `app/db.py` (никакого inline SQL в `api.py`)
+2. Добавь Pydantic-схемы в `app/schemas/`
+3. SQL-запросы — только в `app/db/` (никакого inline SQL в `api.py`)
 
 ### Логирование
 
