@@ -26,7 +26,7 @@ if __name__ == "__main__":
     from app.bot.bot import bot
     from app.config import ADMIN_ID, BOT_TOKEN, VLESS_SID
     from app.db import init_db, close_db
-    from app.services.notifications import check_notifications
+    from app.services.notifications import check_notifications, check_reactivation_notifications
 
     def _log_task_exception(task: asyncio.Task) -> None:
         try:
@@ -54,10 +54,14 @@ if __name__ == "__main__":
 
         scheduler = AsyncIOScheduler()
         scheduler.add_job(check_notifications, "interval", minutes=10, args=[bot])
+        scheduler.add_job(check_reactivation_notifications, "interval", minutes=10, args=[bot])
         scheduler.start()
 
         startup_check_task = asyncio.create_task(check_notifications(bot))
         startup_check_task.add_done_callback(_log_task_exception)
+
+        startup_reactivation_task = asyncio.create_task(check_reactivation_notifications(bot))
+        startup_reactivation_task.add_done_callback(_log_task_exception)
 
         billing_engine.set_bot(bot)
         billing_engine.start()
@@ -90,6 +94,8 @@ if __name__ == "__main__":
                 scheduler.shutdown(wait=False)
             if not startup_check_task.done():
                 startup_check_task.cancel()
+            if not startup_reactivation_task.done():
+                startup_reactivation_task.cancel()
             await close_db()
 
     try:
