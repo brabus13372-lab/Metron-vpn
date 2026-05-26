@@ -9,8 +9,9 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.schemas import (
@@ -589,4 +590,25 @@ async def get_bot_config():
 # Webapp — должен быть последним!
 # ---------------------------------------------------------------------------
 
+def _legacy_webapp_redirect_target(request: Request) -> str:
+    page_name = request.url.path.rsplit("/", 1)[-1]
+    prefix = "/webapp/pages" if request.url.path.startswith("/webapp/") else "/pages"
+    query = f"?{request.url.query}" if request.url.query else ""
+    return f"{prefix}/{page_name}{query}"
+
+
+@app.get("/profile.html", include_in_schema=False)
+@app.get("/support.html", include_in_schema=False)
+@app.get("/protocols.html", include_in_schema=False)
+@app.get("/webapp/profile.html", include_in_schema=False)
+@app.get("/webapp/support.html", include_in_schema=False)
+@app.get("/webapp/protocols.html", include_in_schema=False)
+async def redirect_legacy_webapp_page(request: Request):
+    return RedirectResponse(
+        url=_legacy_webapp_redirect_target(request),
+        status_code=307,
+    )
+
+
+app.mount("/webapp", StaticFiles(directory="webapp", html=True), name="webapp-legacy")
 app.mount("/", StaticFiles(directory="webapp", html=True), name="webapp")

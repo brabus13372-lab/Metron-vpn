@@ -1,6 +1,26 @@
 from aiogram import types
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import WebAppInfo, InlineKeyboardButton, InlineKeyboardMarkup
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+
+def _build_webapp_url(webapp_url: str, user_id: int) -> str:
+    raw = (webapp_url or "").strip() or "/pages/profile.html"
+    parts = urlsplit(raw)
+
+    path = parts.path or "/pages/profile.html"
+    if path in {"/", "/index.html", "/webapp", "/webapp/", "/profile.html", "/webapp/profile.html"}:
+        path = "/pages/profile.html"
+    elif path == "/webapp/index.html":
+        path = "/webapp/pages/profile.html"
+    elif path.endswith("/webapp"):
+        path = f"{path.rstrip('/')}/pages/profile.html"
+    elif path.endswith("/index.html"):
+        path = f"{path[: -len('/index.html')]}/pages/profile.html"
+
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    query["uid"] = str(user_id)
+    return urlunsplit((parts.scheme, parts.netloc, path, urlencode(query), parts.fragment))
 
 
 def main_kb(webapp_url: str, user_id: int) -> InlineKeyboardMarkup:
@@ -9,7 +29,7 @@ def main_kb(webapp_url: str, user_id: int) -> InlineKeyboardMarkup:
     builder.row(
         InlineKeyboardButton(
             text="🌐 Личный кабинет",
-            web_app=WebAppInfo(url=f"{webapp_url}?uid={user_id}"),
+            web_app=WebAppInfo(url=_build_webapp_url(webapp_url, user_id)),
         )
     )
     return builder.as_markup()
@@ -66,7 +86,7 @@ def webapp_button(webapp_url: str, user_id: int) -> InlineKeyboardMarkup:
     builder.row(
         InlineKeyboardButton(
             text="🌐 Открыть личный кабинет",
-            web_app=WebAppInfo(url=f"{webapp_url}?uid={user_id}"),
+            web_app=WebAppInfo(url=_build_webapp_url(webapp_url, user_id)),
         )
     )
     return builder.as_markup()
