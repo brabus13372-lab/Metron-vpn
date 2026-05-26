@@ -15,7 +15,7 @@ from app.core.panel_client import (
     parse_inbound_settings,
     find_client_in_settings,
 )
-from app.db import activate_device, get_user_devices
+from app.db import activate_device, deactivate_device, get_user_devices
 
 logger = logging.getLogger(__name__)
 
@@ -321,13 +321,14 @@ async def activate_all_user_devices(user_id: int):
     return success_count, fail_count, errors
 
 
-async def deactivate_all_user_devices(user_id: int):
+async def deactivate_all_user_devices(user_id: int, reason: str = "insufficient_funds"):
     """
-    Disables all currently active panel clients for the given user.
+    Disables panel clients for the given user and only marks rows inactive in
+    the DB after the panel call succeeds.
 
-    Skips devices that are already inactive (is_active=False) to avoid
-    unnecessary panel calls. The DB state is managed by the caller
-    (billing._deactivate_all_user_devices calls deactivate_device before this).
+    Manually disabled devices are left untouched in the DB so we do not
+    overwrite `disabled_reason='user_request'`, but we still allow billing and
+    reconcile flows to revoke active access for every active device.
 
     Returns (success_count, fail_count).
     """
@@ -340,16 +341,17 @@ async def deactivate_all_user_devices(user_id: int):
     fail_count = 0
 
     for dev in devices:
-        # Only send panel call for currently active devices.
-        if not dev.get("is_active", True):
+        # Preserve user intent for devices that were already disabled manually.
+        if not dev.get("is_active", True) and dev.get("disabled_reason") == "user_request":
             logger.info(
-                "panel.deactivate_device.skip user_id=%s device=%s reason=already_inactive",
+                "panel.deactivate_device.skip user_id=%s device=%s reason=user_request",
                 user_id, dev["device_name"],
             )
             continue
 
         dev_name = dev["device_name"]
         client_uuid = dev["client_uuid"]
+        was_active_in_db = bool(dev.get("is_active", False))
         try:
             ok, err_msg = await update_client_fields(
                 client_uuid,
@@ -357,9 +359,19 @@ async def deactivate_all_user_devices(user_id: int):
                 inbound_id=INBOUND_ID,
             )
             if ok:
+                if was_active_in_db:
+                    db_updated = await deactivate_device(dev["id"], user_id, reason=reason)
+                    if not db_updated:
+                        logger.error(
+                            "panel.deactivate_device.db_sync_fail user_id=%s device=%s uuid=%s reason=device_not_found",
+                            user_id, dev_name, client_uuid,
+                        )
+                        fail_count += 1
+                        continue
+
                 logger.info(
-                    "panel.deactivate_device.success user_id=%s device=%s uuid=%s",
-                    user_id, dev_name, client_uuid,
+                    "panel.deactivate_device.success user_id=%s device=%s uuid=%s db_was_active=%s",
+                    user_id, dev_name, client_uuid, was_active_in_db,
                 )
                 success_count += 1
             else:
@@ -454,10 +466,17 @@ async def rotate_user_key(
 
     new_uuid, vless_link, err = await rotate_client_uuid(old_uuid, user_id, username)
     if err:
-        logger.warning(
-            "rotate_user_key.rotate_failed user_id=%s err=%s — falling back to create",
-            user_id, err,
-        )
-        vless_link, new_uuid, err = await create_panel_client(user_id, username)
+        if "not found in panel" in str(err).lower():
+            logger.warning(
+                "rotate_user_key.rotate_missing user_id=%s err=%s — falling back to create",
+                user_id, err,
+            )
+            vless_link, new_uuid, err = await create_panel_client(user_id, username)
+        else:
+            logger.error(
+                "rotate_user_key.rotate_failed user_id=%s err=%s",
+                user_id, err,
+            )
+            return None, None, err
 
     return vless_link, new_uuid, err

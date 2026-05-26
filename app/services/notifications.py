@@ -68,14 +68,26 @@ def _build_low_balance_message(
     device_count: int,
     monthly_cost_cents: int,
     days_left: Decimal,
+    *,
+    critical: bool = False,
 ) -> str:
+    title = (
+        "🚨 <b>Баланс почти исчерпан.</b>"
+        if critical else
+        "⚠️ <b>Баланс скоро закончится.</b>"
+    )
+    action = (
+        "Пополните баланс как можно скорее, чтобы доступ не отключился."
+        if critical else
+        "Чтобы доступ не отключился, пополните баланс заранее."
+    )
     return (
-        "⚠️ <b>Баланс скоро закончится.</b>\n\n"
+        f"{title}\n\n"
         f"Текущий баланс: <b>{_rub_text(balance_cents)} ₽</b>\n"
         f"Активных устройств: <b>{device_count}</b>\n"
         f"Текущий расход: <b>{_rub_text(monthly_cost_cents)} руб/мес</b>\n"
         f"Остатка хватит примерно на <b>{days_left:.1f}</b> дн.\n\n"
-        "Чтобы доступ не отключился, пополните баланс заранее."
+        f"{action}"
     )
 
 
@@ -183,12 +195,18 @@ async def _check_low_balance(bot: Bot) -> None:
                 u.user_id,
                 u.balance,
                 u.low_balance_notified,
-                COUNT(d.id) FILTER (WHERE d.is_active = TRUE) AS device_count,
+                COALESCE(u.low_balance_critical_notified, FALSE) AS low_balance_critical_notified,
+                COUNT(d.id) AS total_device_count,
+                COUNT(d.id) FILTER (WHERE d.is_active = TRUE) AS active_device_count,
                 COALESCE(SUM(d.monthly_cost) FILTER (WHERE d.is_active = TRUE), 0) AS monthly_cost_cents
             FROM users u
             LEFT JOIN devices d ON d.user_id = u.user_id
             WHERE u.status = 'ACTIVE'
-            GROUP BY u.user_id, u.balance, u.low_balance_notified
+            GROUP BY
+                u.user_id,
+                u.balance,
+                u.low_balance_notified,
+                u.low_balance_critical_notified
             """
         )
 
@@ -196,60 +214,60 @@ async def _check_low_balance(bot: Bot) -> None:
             user_id = row["user_id"]
             balance_cents = row["balance"] or 0
             low_balance_notified = row["low_balance_notified"]
-            device_count = row["device_count"] or 0
+            low_balance_critical_notified = row["low_balance_critical_notified"]
+            total_device_count = row["total_device_count"] or 0
+            device_count = row["active_device_count"] or 0
             monthly_cost_cents = row["monthly_cost_cents"] or 0
 
-            # Юзер без устройств — сбрасываем флаг и пропускаем
-            if device_count <= 0 or monthly_cost_cents <= 0:
-                if low_balance_notified:
+            # Юзер без устройств — сбрасываем low-balance флаги.
+            if total_device_count <= 0:
+                if low_balance_notified or low_balance_critical_notified:
                     await conn.execute(
-                        "UPDATE users SET low_balance_notified = FALSE WHERE user_id = $1",
+                        """
+                        UPDATE users
+                        SET low_balance_notified = FALSE,
+                            low_balance_critical_notified = FALSE
+                        WHERE user_id = $1
+                        """,
                         user_id,
                     )
                 continue
 
-            # ── Баг 1 fix: баланс = 0, ключи уже выключены ──────────────────
+            # У пользователя могут быть только неактивные устройства после
+            # временной блокировки. В таком случае low-balance уведомления
+            # не шлём и не сбрасываем флаги, пока доступ не восстановится.
+            if device_count <= 0 or monthly_cost_cents <= 0:
+                continue
+
+            # Hard suspension обрабатывается billing-слоем сразу в момент
+            # деактивации. Здесь оставляем только предупреждения "до отключения".
             if balance_cents <= 0:
-                if not low_balance_notified:
-                    try:
-                        await bot.send_message(
-                            user_id,
-                            _build_zero_balance_message(device_count, monthly_cost_cents),
-                            reply_markup=_payment_keyboard(),
-                            parse_mode="HTML",
-                        )
-                        await conn.execute(
-                            "UPDATE users SET low_balance_notified = TRUE WHERE user_id = $1",
-                            user_id,
-                        )
-                        logger.info("notify_zero_balance.sent user_id=%s", user_id)
-                    except Exception as e:
-                        logger.error(
-                            "notify_zero_balance_failed user_id=%s err=%s",
-                            user_id,
-                            e,
-                            exc_info=True,
-                        )
                 continue
 
             days_left = _days_left(balance_cents, monthly_cost_cents)
 
-            # ── Баланс восстановился выше порога — сброс флага ───────────────
+            # Баланс восстановился выше раннего порога — сбрасываем оба warning-флага.
             if days_left > LOW_BALANCE_DAYS_THRESHOLD_EARLY:
-                if low_balance_notified:
+                if low_balance_notified or low_balance_critical_notified:
                     await conn.execute(
-                        "UPDATE users SET low_balance_notified = FALSE WHERE user_id = $1",
+                        """
+                        UPDATE users
+                        SET low_balance_notified = FALSE,
+                            low_balance_critical_notified = FALSE
+                        WHERE user_id = $1
+                        """,
                         user_id,
                     )
                 continue
 
-            # ── Раннее предупреждение (5 дней) или критическое (2 дня) ───────
-            # low_balance_notified=True значит уже отправляли — не спамим
-            should_notify = days_left <= LOW_BALANCE_DAYS_THRESHOLD_EARLY
-            if not should_notify or low_balance_notified:
+            if days_left <= LOW_BALANCE_DAYS_THRESHOLD and low_balance_critical_notified:
                 continue
 
             try:
+                is_critical = days_left <= LOW_BALANCE_DAYS_THRESHOLD
+                if not is_critical and low_balance_notified:
+                    continue
+
                 await bot.send_message(
                     user_id,
                     _build_low_balance_message(
@@ -257,18 +275,35 @@ async def _check_low_balance(bot: Bot) -> None:
                         device_count=device_count,
                         monthly_cost_cents=monthly_cost_cents,
                         days_left=days_left,
+                        critical=is_critical,
                     ),
                     reply_markup=_payment_keyboard(),
                     parse_mode="HTML",
                 )
-                await conn.execute(
-                    "UPDATE users SET low_balance_notified = TRUE WHERE user_id = $1",
-                    user_id,
-                )
-                logger.info(
-                    "notify_low_balance.sent user_id=%s days_left=%s",
-                    user_id, days_left,
-                )
+
+                if is_critical:
+                    await conn.execute(
+                        """
+                        UPDATE users
+                        SET low_balance_notified = TRUE,
+                            low_balance_critical_notified = TRUE
+                        WHERE user_id = $1
+                        """,
+                        user_id,
+                    )
+                    logger.info(
+                        "notify_low_balance_critical.sent user_id=%s days_left=%s",
+                        user_id, days_left,
+                    )
+                else:
+                    await conn.execute(
+                        "UPDATE users SET low_balance_notified = TRUE WHERE user_id = $1",
+                        user_id,
+                    )
+                    logger.info(
+                        "notify_low_balance_early.sent user_id=%s days_left=%s",
+                        user_id, days_left,
+                    )
             except Exception as e:
                 logger.error(
                     "notify_low_balance_failed user_id=%s err=%s",
@@ -283,11 +318,11 @@ async def check_reactivation_notifications(bot: Bot) -> None:
     Отправляет уведомление юзерам у которых:
       - статус ACTIVE
       - баланс > 0
-      - low_balance_notified = TRUE  (значит раньше гасили из-за нуля)
+      - reactivation_notification_pending = TRUE
       - есть активные устройства
-    Это значит — юзер пополнил баланс после отключения, ключи включились reconcile,
-    нужно сообщить об этом явно.
-    Сбрасывает low_balance_notified = FALSE после отправки.
+    Это значит — доступ ранее реально приостанавливался, а теперь восстановлен.
+    Сбрасывает pending-флаг после отправки, либо тихо очищает его если баланс
+    всё ещё слишком низкий для "всё снова хорошо" уведомления.
     """
     db = get_db()
 
@@ -303,7 +338,7 @@ async def check_reactivation_notifications(bot: Bot) -> None:
             LEFT JOIN devices d ON d.user_id = u.user_id
             WHERE u.status = 'ACTIVE'
               AND u.balance > 0
-              AND u.low_balance_notified = TRUE
+              AND COALESCE(u.reactivation_notification_pending, FALSE) = TRUE
             GROUP BY u.user_id, u.balance
             HAVING COUNT(d.id) FILTER (WHERE d.is_active = TRUE) > 0
             """
@@ -317,9 +352,21 @@ async def check_reactivation_notifications(bot: Bot) -> None:
 
             days_left = _days_left(balance_cents, monthly_cost_cents)
 
-            # Если баланс пополнили, но он всё ещё низкий (≤5 дней) — не шлём
-            # "всё ОК", иначе будет путаница (ключи включены, но деньги кончаются)
+            # Если доступ восстановился, но денег всё ещё мало, не шлём
+            # сообщение "всё снова ок" и не откладываем его на потом.
             if days_left <= LOW_BALANCE_DAYS_THRESHOLD_EARLY:
+                await conn.execute(
+                    """
+                    UPDATE users
+                    SET reactivation_notification_pending = FALSE
+                    WHERE user_id = $1
+                    """,
+                    user_id,
+                )
+                logger.info(
+                    "notify_reactivated.skip_low_balance user_id=%s days_left=%s",
+                    user_id, days_left,
+                )
                 continue
 
             try:
@@ -329,7 +376,11 @@ async def check_reactivation_notifications(bot: Bot) -> None:
                     parse_mode="HTML",
                 )
                 await conn.execute(
-                    "UPDATE users SET low_balance_notified = FALSE WHERE user_id = $1",
+                    """
+                    UPDATE users
+                    SET reactivation_notification_pending = FALSE
+                    WHERE user_id = $1
+                    """,
                     user_id,
                 )
                 logger.info("notify_reactivated.sent user_id=%s", user_id)

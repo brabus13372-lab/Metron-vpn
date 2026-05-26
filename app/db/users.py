@@ -192,6 +192,14 @@ async def set_low_balance_notified(user_id: int, value: bool) -> None:
         )
 
 
+async def set_reactivation_notification_pending(user_id: int, value: bool) -> None:
+    async with get_db().transaction() as conn:
+        await conn.execute(
+            "UPDATE users SET reactivation_notification_pending = $1 WHERE user_id = $2",
+            value, user_id,
+        )
+
+
 async def get_expired_trial_users() -> List[int]:
     async with get_db().connection() as conn:
         rows = await conn.fetch(

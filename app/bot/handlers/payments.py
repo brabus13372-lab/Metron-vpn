@@ -15,6 +15,7 @@ from app.db import (
     get_user_data_dict,
     get_user_devices,
     record_payment_idempotent,
+    set_reactivation_notification_pending,
     update_user_status,
 )
 from app.services.vpn import activate_all_user_devices
@@ -65,7 +66,7 @@ def _validate_payment(payment: types.SuccessfulPayment, user_id: int) -> bool:
     return True
 
 
-async def _execute_activation(user_id: int, bot: Bot) -> None:
+async def _execute_activation(user_id: int, bot: Bot) -> tuple[int, int, list]:
     """
     Активирует устройства в панели.
 
@@ -81,12 +82,13 @@ async def _execute_activation(user_id: int, bot: Bot) -> None:
                 bot,
                 f"🚨 Activation failed user={user_id} errors={html.escape(str(errors[:3]))}",
             )
+        return success, failed, errors
     except Exception as e:
         await _safe_alert_admin(
             bot,
             f"🚨 CRITICAL activation error user={user_id}: {html.escape(str(e))}",
         )
-        return
+        return 0, 1, [("activation", str(e))]
 
 
 @dp.callback_query(F.data == "buy_vpn")
@@ -282,8 +284,16 @@ async def success_payment(message: types.Message, bot: Bot) -> None:
         return
 
     # 6. Активируем устройства в панели
+    suspended_devices = [
+        d for d in devices
+        if not d["is_active"] and d.get("disabled_reason") == "insufficient_funds"
+    ]
+    activation_success = 0
+    activation_failed = 0
     if devices:
-        await _execute_activation(user_id, bot)
+        activation_success, activation_failed, _ = await _execute_activation(user_id, bot)
+        if suspended_devices and activation_failed == 0 and activation_success > 0:
+            await set_reactivation_notification_pending(user_id, False)
     elif legacy_account_uuid:
         logger.warning(
             "Payment completed for legacy account-level access user=%s uuid=%s without billable devices",
@@ -297,11 +307,24 @@ async def success_payment(message: types.Message, bot: Bot) -> None:
 
     # 7. Отправляем подтверждение — только WebApp кнопка
     if devices:
-        user_text = (
-            "🎉 <b>Оплата прошла успешно!</b>\n"
-            f"<b>💰 Баланс:</b> {new_balance:.2f} ₽\n"
-            "Устройства повторно активированы. Откройте личный кабинет для управления доступом:"
-        )
+        if suspended_devices and activation_failed == 0 and activation_success > 0:
+            user_text = (
+                "🎉 <b>Оплата прошла успешно!</b>\n"
+                f"<b>💰 Баланс:</b> {new_balance:.2f} ₽\n"
+                "Доступ восстановлен, устройства снова активны. Откройте личный кабинет для управления доступом:"
+            )
+        elif suspended_devices and activation_failed > 0:
+            user_text = (
+                "🎉 <b>Оплата прошла успешно!</b>\n"
+                f"<b>💰 Баланс:</b> {new_balance:.2f} ₽\n"
+                "Баланс пополнен, но часть устройств ещё восстанавливается. Проверьте профиль чуть позже или напишите в поддержку."
+            )
+        else:
+            user_text = (
+                "🎉 <b>Оплата прошла успешно!</b>\n"
+                f"<b>💰 Баланс:</b> {new_balance:.2f} ₽\n"
+                "Баланс обновлён. Откройте личный кабинет для управления доступом:"
+            )
     else:
         user_text = (
             "🎉 <b>Оплата прошла успешно!</b>\n"

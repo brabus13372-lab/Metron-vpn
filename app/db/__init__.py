@@ -19,6 +19,7 @@ from app.db.users import (
     update_user_status,
     deactivate_panel_client,
     set_low_balance_notified,
+    set_reactivation_notification_pending,
     get_expired_trial_users,
 )
 from app.db.devices import (
@@ -70,6 +71,7 @@ __all__ = [
     "update_user_status",
     "deactivate_panel_client",
     "set_low_balance_notified",
+    "set_reactivation_notification_pending",
     "get_expired_trial_users",
     # devices
     "add_device",

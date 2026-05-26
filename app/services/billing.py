@@ -10,11 +10,10 @@ from apscheduler.triggers.interval import IntervalTrigger
 from app.config import ADMIN_ID
 from app.db import (
     charge_daily_billing_atomic,
-    deactivate_device,
     get_all_users_with_devices,
     get_expired_trial_users,
-    get_user_devices,
     get_user_total_monthly_cost,
+    set_reactivation_notification_pending,
     update_user_status,
 )
 from app.services.vpn import deactivate_all_user_devices
@@ -215,15 +214,10 @@ class BillingEngine:
 
     async def _deactivate_all_user_devices(self, user_id: int) -> None:
         logger.info("billing.deactivate_devices.start user_id=%s", user_id)
-
-        devices = await get_user_devices(user_id)
-
-        # Деактивируем только активные устройства, неактивные пропускаем
-        for dev in devices:
-            if dev.get("is_active"):
-                await deactivate_device(dev["id"], user_id, reason="insufficient_funds")
-
-        success_count, fail_count = await deactivate_all_user_devices(user_id)
+        success_count, fail_count = await deactivate_all_user_devices(
+            user_id,
+            reason="insufficient_funds",
+        )
 
         # Меняем статус юзера: EXPIRED — деньги кончились, доступ отозван.
         # payments.py вернёт статус в ACTIVE при следующем пополнении.
@@ -244,6 +238,8 @@ class BillingEngine:
             "Пополните баланс и при необходимости обратитесь в поддержку."
         )
         await self._notify_user(user_id, user_text)
+        if success_count > 0:
+            await set_reactivation_notification_pending(user_id, True)
 
         if fail_count > 0:
             await self._notify_admin(

@@ -16,6 +16,7 @@ from app.db import (
     get_user_data_dict,
     add_balance_atomic,
     get_user_balance,
+    set_reactivation_notification_pending,
     update_user_status,
     get_user_devices,
 )
@@ -95,6 +96,8 @@ async def admin_give_balance(message: types.Message, bot: Bot) -> None:
             "admin_give_balance: reactivated devices user_id=%s ok=%s fail=%s",
             target_id, success_count, fail_count,
         )
+        if fail_count == 0 and success_count > 0:
+            await set_reactivation_notification_pending(target_id, False)
         await message.answer(
             f"🔌 Устройства пользователя <code>{target_id}</code> реактивированы: "
             f"✅{success_count} ❌{fail_count}",
@@ -102,10 +105,20 @@ async def admin_give_balance(message: types.Message, bot: Bot) -> None:
         )
 
     try:
+        user_notice = (
+            f"💰 Администратор пополнил ваш баланс на <b>{amount_rub:.2f} руб.</b>\n"
+            f"💼 Текущий баланс: <b>{new_balance_rub:.2f} руб.</b>"
+        )
+        if inactive and fail_count == 0 and success_count > 0:
+            user_notice += "\n\n🔌 Доступ восстановлен, устройства снова активны."
+        elif inactive and success_count > 0:
+            user_notice += (
+                "\n\n🔌 Часть устройств уже восстановлена. "
+                "Остальные сервис догонит автоматически."
+            )
         await bot.send_message(
             target_id,
-            f"💰 Администратор пополнил ваш баланс на <b>{amount_rub:.2f} руб.</b>\n"
-            f"💼 Текущий баланс: <b>{new_balance_rub:.2f} руб.</b>",
+            user_notice,
             parse_mode="HTML",
         )
     except Exception:

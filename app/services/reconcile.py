@@ -51,6 +51,7 @@ from app.db import (
     get_user_data_dict,
     update_device_link,
     activate_device,
+    deactivate_device,
 )
 from app.services.vpn import (
     _build_device_email,
@@ -67,12 +68,12 @@ logger = logging.getLogger(__name__)
 # Сбор состояния панели
 # ---------------------------------------------------------------------------
 
-async def _fetch_panel_clients() -> dict[str, dict[str, Any]]:
-    """Возвращает {client_uuid: client_dict}. При ошибке → пустой словарь."""
+async def _fetch_panel_clients() -> dict[str, dict[str, Any]] | None:
+    """Возвращает {client_uuid: client_dict}. При ошибке → None."""
     inbound = await get_inbound(INBOUND_ID)
     if not inbound:
         logger.error("reconcile.fetch_panel.fail inbound_id=%s", INBOUND_ID)
-        return {}
+        return None
     settings = parse_inbound_settings(inbound)
     clients: list[dict] = settings.get("clients", [])
     return {c["id"]: c for c in clients if c.get("id")}
@@ -141,7 +142,7 @@ async def reconcile_once() -> None:
     logger.info("reconcile.start")
 
     panel_clients = await _fetch_panel_clients()
-    if not panel_clients:
+    if panel_clients is None:
         logger.warning("reconcile.skip reason=panel_unavailable")
         return
 
@@ -259,6 +260,21 @@ async def reconcile_once() -> None:
                         )
                         errors += 1
 
+                elif should_be_enabled and panel_enabled and not db_is_active:
+                    db_fixed = await activate_device(dev["id"], user_id)
+                    if db_fixed:
+                        logger.warning(
+                            "reconcile.fixed_db_active_only user_id=%s device=%s uuid=%s",
+                            user_id, device_name, client_uuid,
+                        )
+                        fixed += 1
+                    else:
+                        logger.error(
+                            "reconcile.fix_db_active_only.fail user_id=%s device=%s uuid=%s",
+                            user_id, device_name, client_uuid,
+                        )
+                        errors += 1
+
                 elif not should_be_enabled and panel_enabled:
                     ok, msg = await update_client_fields(
                         client_uuid, {"enable": False}, inbound_id=INBOUND_ID
@@ -273,6 +289,22 @@ async def reconcile_once() -> None:
                         logger.error(
                             "reconcile.fix_disable.fail user_id=%s device=%s uuid=%s msg=%s",
                             user_id, device_name, client_uuid, msg,
+                        )
+                        errors += 1
+
+                elif not should_be_enabled and not panel_enabled and db_is_active:
+                    disable_reason = "user_request" if manual_off else (dev.get("disabled_reason") or "insufficient_funds")
+                    db_fixed = await deactivate_device(dev["id"], user_id, reason=disable_reason)
+                    if db_fixed:
+                        logger.warning(
+                            "reconcile.fixed_db_inactive_only user_id=%s device=%s uuid=%s reason=%s",
+                            user_id, device_name, client_uuid, disable_reason,
+                        )
+                        fixed += 1
+                    else:
+                        logger.error(
+                            "reconcile.fix_db_inactive_only.fail user_id=%s device=%s uuid=%s",
+                            user_id, device_name, client_uuid,
                         )
                         errors += 1
 
