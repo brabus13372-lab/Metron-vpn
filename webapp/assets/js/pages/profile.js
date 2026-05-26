@@ -6,6 +6,17 @@
     const tgUser = tg?.initDataUnsafe?.user;
     const params = new URLSearchParams(window.location.search);
     const USER_ID = tgUser?.id ?? (params.get('uid') ? parseInt(params.get('uid')) : null);
+    const PROFILE_LOADING_IDS = [
+      'user-name',
+      'user-username',
+      'status-badge',
+      'balance-amount',
+      'balance-sub',
+      'sub-status',
+      'sub-days',
+      'sub-cost',
+      'user-tg-id',
+    ];
 
     // _instrKey — ключ для инструкции: первое активное устройство
     let _instrKey     = '';
@@ -13,6 +24,10 @@
     let _activeDevice = null;
     let _botName      = null;
     let _userStatus   = null;
+    let _botNamePromise = null;
+    let _loadSeq = 0;
+    let _profileLoaded = false;
+    let _lastVisibleRefreshAt = 0;
 
     if (tgUser) {
       const fullName = [tgUser.first_name, tgUser.last_name].filter(Boolean).join(' ');
@@ -25,33 +40,133 @@
     // ------------------------------------------------------------------
     // Загрузка профиля
     // ------------------------------------------------------------------
-    async function loadProfile() {
-      if (!USER_ID) { showToast('⚠️ Откройте приложение через Telegram', 'error'); return; }
+    async function ensureBotName() {
+      if (_botName) return _botName;
+      if (_botNamePromise) return _botNamePromise;
+
+      _botNamePromise = fetchBotConfig()
+        .then(cfg => {
+          _botName = cfg?.bot_name || null;
+          return _botName;
+        })
+        .catch(e => {
+          console.warn('fetchBotConfig failed:', e);
+          return null;
+        })
+        .finally(() => {
+          _botNamePromise = null;
+        });
+
+      return _botNamePromise;
+    }
+
+    function formatMoney(value) {
+      return `${parseFloat(value ?? 0).toFixed(2)} ₽`;
+    }
+
+    function buildDevicesLoadingMarkup() {
+      return `
+        <div class="device-item" aria-hidden="true">
+          <div class="device-dot inactive"></div>
+          <div class="device-main">
+            <span class="device-name skeleton">Загрузка устройства</span>
+            <span class="device-meta skeleton">Статус загружается</span>
+          </div>
+          <span class="device-item-arrow"> </span>
+        </div>
+        <div class="device-item" aria-hidden="true">
+          <div class="device-dot inactive"></div>
+          <div class="device-main">
+            <span class="device-name skeleton">Загрузка устройства</span>
+            <span class="device-meta skeleton">Статус загружается</span>
+          </div>
+          <span class="device-item-arrow"> </span>
+        </div>`;
+    }
+
+    function renderDevicesEmptyState() {
+      const list = document.getElementById('devices-list');
+      list.innerHTML = `
+        <div class="device-empty">
+          <div class="device-empty-title">Пока нет устройств</div>
+          <div class="device-empty-desc">Добавьте первое устройство, чтобы получить персональный ключ и быстро подключиться по инструкции.</div>
+        </div>`;
+    }
+
+    function renderDevicesErrorState(message) {
+      const list = document.getElementById('devices-list');
+      list.innerHTML = `
+        <div class="device-empty">
+          <div class="device-empty-title">Профиль не загрузился</div>
+          <div class="device-empty-desc">${escHtml(message)}</div>
+        </div>`;
+    }
+
+    function setProfileLoading(isLoading, { soft = false } = {}) {
+      document.body.classList.toggle('profile-soft-loading', Boolean(isLoading && soft));
+
+      PROFILE_LOADING_IDS.forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.classList.toggle('skeleton', Boolean(isLoading && !soft));
+        if (!soft) {
+          el.setAttribute('aria-busy', isLoading ? 'true' : 'false');
+        }
+      });
+
+      const topupBtn = document.getElementById('btn-topup');
+      const addBtn = document.getElementById('btn-add-device');
+      if (topupBtn) topupBtn.disabled = Boolean(isLoading && !_profileLoaded);
+      if (addBtn) addBtn.disabled = Boolean(isLoading && !_profileLoaded);
+
+      const list = document.getElementById('devices-list');
+      if (!list) return;
+      list.classList.toggle('is-soft-loading', Boolean(isLoading && soft));
+
+      if (isLoading && (!soft || !_profileLoaded)) {
+        list.innerHTML = buildDevicesLoadingMarkup();
+      }
+    }
+
+    async function loadProfile({ soft = false } = {}) {
+      if (!USER_ID) {
+        renderDevicesErrorState('Откройте приложение через Telegram, чтобы увидеть профиль.');
+        showToast('⚠️ Откройте приложение через Telegram', 'error');
+        return;
+      }
+
+      const seq = ++_loadSeq;
+      setProfileLoading(true, { soft: soft && _profileLoaded });
+
       try {
-        const data = await fetchUserData(USER_ID);
+        const [data] = await Promise.all([
+          fetchUserData(USER_ID),
+          ensureBotName(),
+        ]);
+        if (seq !== _loadSeq) return;
         renderProfile(data);
+        _profileLoaded = true;
       } catch (e) {
+        if (seq !== _loadSeq) return;
         console.error(e);
         const msg = e?.message ? `Ошибка загрузки: ${e.message}` : 'Ошибка загрузки данных';
-        showToast(msg, 'error');
-      }
-      try {
-        if (!_botName) {
-          const cfg = await fetchBotConfig();
-          _botName = cfg.bot_name;
+        if (!_profileLoaded) {
+          renderDevicesErrorState(msg);
         }
-      } catch (e) {
-        console.warn('fetchBotConfig failed:', e);
+        showToast(msg, 'error');
+      } finally {
+        if (seq === _loadSeq) {
+          setProfileLoading(false, { soft: soft && _profileLoaded });
+        }
       }
     }
 
     function renderProfile(data) {
-      const bal = parseFloat(data.balance ?? 0).toFixed(2);
-      document.getElementById('balance-amount').textContent = `${bal} ₽`;
+      document.getElementById('balance-amount').textContent = formatMoney(data.balance);
 
       const cost = data.monthly_cost ?? null;
       document.getElementById('balance-sub').textContent = cost
-        ? `Расход: ${parseFloat(cost).toFixed(2)} ₽/мес`
+        ? `Расход: ${formatMoney(cost)}/мес`
         : 'Нет активных устройств';
 
       const statusMap = {
@@ -68,9 +183,12 @@
 
       document.getElementById('sub-status').textContent = st.label;
       document.getElementById('sub-days').textContent   = data.days_left != null ? `${data.days_left} дн.` : '—';
-      document.getElementById('sub-cost').textContent   = cost ? `${parseFloat(cost).toFixed(2)} ₽/мес` : '—';
+      document.getElementById('sub-cost').textContent   = cost ? `${formatMoney(cost)}/мес` : '—';
 
-      _devices = data.devices ?? [];
+      _devices = [...(data.devices ?? [])].sort((a, b) => {
+        if (a.is_active !== b.is_active) return Number(b.is_active) - Number(a.is_active);
+        return new Date(a.created_at || 0) - new Date(b.created_at || 0);
+      });
 
       // Для инструкции используем первый активный ключ устройства.
       if (_devices.length) {
@@ -81,28 +199,93 @@
         _instrKey = '';
       }
 
+      syncInstructionState();
       renderDevices(_devices);
+    }
+
+    function syncInstructionState() {
+      const copyBtn = document.getElementById('btn-instr-copy');
+      const supportBtn = document.getElementById('btn-instr-support');
+      if (!copyBtn || !supportBtn) return;
+
+      if (_instrKey) {
+        copyBtn.disabled = false;
+        copyBtn.innerHTML = `
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+          </svg>
+          Скопировать ключ`;
+        supportBtn.className = 'btn btn-ghost btn-full';
+        supportBtn.innerHTML = `
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+          Написать в поддержку`;
+        return;
+      }
+
+      copyBtn.disabled = true;
+      copyBtn.innerHTML = `
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+        </svg>
+        Ключ недоступен`;
+      supportBtn.className = 'btn btn-primary btn-full';
+      supportBtn.innerHTML = `
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+        </svg>
+        Открыть поддержку`;
     }
 
     // ------------------------------------------------------------------
     // Рендер списка устройств
     // ------------------------------------------------------------------
+    function formatDeviceMeta(dev) {
+      const cost = `${formatMoney(dev.monthly_cost)}/мес`;
+      if (dev.is_active) {
+        return `Активно · ${cost}`;
+      }
+      const reasonMap = {
+        user_request: 'выключено вручную',
+        insufficient_funds: 'недостаточно средств',
+      };
+      const reason = dev.disabled_reason ? reasonMap[dev.disabled_reason] || dev.disabled_reason : 'отключено';
+      return `${reason} · ${cost}`;
+    }
+
     function renderDevices(devices) {
       const list = document.getElementById('devices-list');
       if (!devices.length) {
-        list.innerHTML = `<div style="padding:var(--space-4) 0; text-align:center;"><div style="font-size:var(--text-sm); color:var(--color-text-faint); font-style:italic;">Нет устройств</div></div>`;
+        renderDevicesEmptyState();
         return;
       }
       list.innerHTML = devices.map(dev => {
         return `
-          <div class="device-item" onclick="openDeviceSheet(${dev.id})">
+          <div
+            class="device-item ${dev.is_active ? '' : 'is-inactive'}"
+            onclick="openDeviceSheet(${dev.id})"
+            onkeydown="handleDeviceItemKeydown(event, ${dev.id})"
+            role="button"
+            tabindex="0"
+            aria-label="Открыть устройство ${escHtml(dev.device_name)}"
+          >
             <div class="device-dot ${dev.is_active ? 'active' : 'inactive'}"></div>
-            <span class="device-name">${escHtml(dev.device_name)}</span>
-            <span class="device-cost">${parseFloat(dev.monthly_cost ?? 0).toFixed(2)} ₽/мес</span>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--color-text-faint); flex-shrink:0;"><polyline points="9 18 15 12 9 6"/></svg>
+            <div class="device-main">
+              <span class="device-name">${escHtml(dev.device_name)}</span>
+              <span class="device-meta">${escHtml(formatDeviceMeta(dev))}</span>
+            </div>
+            <svg class="device-item-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
           </div>`;
       }).join('');
     }
+
+    window.handleDeviceItemKeydown = function(event, deviceId) {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        openDeviceSheet(deviceId);
+      }
+    };
 
     // ------------------------------------------------------------------
     // Шторка устройства
@@ -182,7 +365,7 @@
     window.copyDeviceSheetKey = function() {
       const text = document.getElementById('ds-key-text').textContent;
       if (!text || text === '—') return;
-      navigator.clipboard.writeText(text).then(() => showToast('✅ Ключ скопирован'));
+      copyText(text, '✅ Ключ скопирован');
     };
 
     // ------------------------------------------------------------------
@@ -201,9 +384,10 @@
         _activeDevice.vless_link = res.vless_link;
         document.getElementById('ds-key-text').textContent = res.vless_link;
         document.getElementById('ds-key-section').style.display = '';
+        closeModal('modal-device');
         openKeyModal(res.vless_link);
         showToast('✅ Ключ устройства обновлён');
-        await loadProfile();
+        await loadProfile({ soft: true });
       } catch (e) {
         const msg = e?.message ? `Ошибка обновления: ${e.message}` : '❌ Ошибка обновления ключа';
         showToast(msg, 'error');
@@ -245,7 +429,7 @@
         }
         closeModal('modal-delete');
         showToast('✅ Устройство отключено');
-        await loadProfile();
+        await loadProfile({ soft: true });
       } catch (e) {
         const msg = e?.message ? `Ошибка отключения: ${e.message}` : '❌ Ошибка отключения';
         showToast(msg, 'error');
@@ -281,7 +465,7 @@
             }
             closeModal('modal-hard-delete');
             showToast('✅ Устройство удалено');
-            await loadProfile();
+            await loadProfile({ soft: true });
         } catch (e) {
             showToast(e?.message ? `Ошибка: ${e.message}` : '❌ Ошибка удаления', 'error');
         } finally {
@@ -316,7 +500,7 @@
         }
         closeModal('modal-add');
         showToast('✅ Устройство добавлено');
-        await loadProfile();
+        await loadProfile({ soft: true });
       } catch (e) {
         const msg = e?.message ? `Ошибка: ${e.message}` : '❌ Ошибка добавления устройства';
         showToast(msg, 'error');
@@ -337,7 +521,7 @@
     window.copyModalKey = function() {
       const text = document.getElementById('modal-new-key-text').textContent;
       if (!text) return;
-      navigator.clipboard.writeText(text).then(() => showToast('✅ Ключ скопирован'));
+      copyText(text, '✅ Ключ скопирован');
     };
 
     // ------------------------------------------------------------------
@@ -345,9 +529,12 @@
     // ------------------------------------------------------------------
     window.openInstruction = function() {
       const preview = document.getElementById('instr-key-preview');
+      syncInstructionState();
       if (_instrKey) {
         const short = _instrKey.length > 60 ? _instrKey.slice(0, 60) + '…' : _instrKey;
         preview.textContent = short;
+      } else if (_devices.length) {
+        preview.textContent = 'Сейчас у вас нет активного ключа. Пополните баланс или откройте поддержку, если доступ не восстановился автоматически.';
       } else {
         preview.textContent = 'Сначала добавьте устройство и скопируйте его ключ';
       }
@@ -356,21 +543,20 @@
 
     window.copyKeyFromInstruction = function() {
       if (!_instrKey) { showToast('❌ Ключ не найден — добавьте устройство', 'error'); return; }
-      navigator.clipboard.writeText(_instrKey).then(() => {
-        showToast('✅ Ключ скопирован');
-      });
+      copyText(_instrKey, '✅ Ключ скопирован');
     };
 
     // ------------------------------------------------------------------
     // Поддержка — редирект в бота
     // ------------------------------------------------------------------
-    window.openSupport = function() {
+    window.openSupport = async function() {
       closeModal('modal-instruction');
-      if (_botName) {
+      const botName = _botName || await ensureBotName();
+      if (botName) {
         if (tg) {
-          tg.openTelegramLink(`https://t.me/${_botName}?start=support`);
+          tg.openTelegramLink(`https://t.me/${botName}?start=support`);
         } else {
-          window.open(`https://t.me/${_botName}?start=support`, '_blank');
+          window.open(`https://t.me/${botName}?start=support`, '_blank');
         }
       } else {
         window.location.href = 'support.html';
@@ -380,25 +566,31 @@
     // ------------------------------------------------------------------
     // Разное
     // ------------------------------------------------------------------
-    window.openTopup = function() {
-      if (!_botName) {
-        if (tg) tg.close();
+    window.openTopup = async function() {
+      const botName = _botName || await ensureBotName();
+      if (!botName) {
+        showToast('Не удалось открыть пополнение. Попробуйте ещё раз через пару секунд.', 'error');
         return;
       }
       if (tg) {
-        tg.openTelegramLink(`https://t.me/${_botName}?start=topup`);
+        tg.openTelegramLink(`https://t.me/${botName}?start=topup`);
       } else {
-        window.open(`https://t.me/${_botName}?start=topup`, '_blank');
+        window.open(`https://t.me/${botName}?start=topup`, '_blank');
       }
     };
 
+    function updateBodyScrollLock() {
+      const hasOpenModal = document.querySelector('.modal-overlay.open');
+      document.body.style.overflow = hasOpenModal ? 'hidden' : '';
+    }
+
     function openModal(id) {
       document.getElementById(id).classList.add('open');
-      document.body.style.overflow = 'hidden';
+      updateBodyScrollLock();
     }
     window.closeModal = function(id) {
       document.getElementById(id).classList.remove('open');
-      document.body.style.overflow = '';
+      updateBodyScrollLock();
     };
     document.querySelectorAll('.modal-overlay').forEach(el => {
       el.addEventListener('click', e => { if (e.target === el) closeModal(el.id); });
@@ -445,6 +637,16 @@
       el.addEventListener('animationend', () => el.remove(), { once: true });
     }
 
+    async function copyText(text, successMessage) {
+      try {
+        await navigator.clipboard.writeText(text);
+        showToast(successMessage);
+      } catch (e) {
+        console.warn('clipboard write failed:', e);
+        showToast('Не удалось скопировать ключ. Разрешите доступ к буферу обмена и попробуйте снова.', 'error');
+      }
+    }
+
     function escHtml(s) {
       return String(s)
         .replace(/&/g,'&amp;').replace(/</g,'&lt;')
@@ -454,5 +656,9 @@
     loadProfile();
 
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') loadProfile();
+      if (document.visibilityState !== 'visible') return;
+      const now = Date.now();
+      if (now - _lastVisibleRefreshAt < 5000) return;
+      _lastVisibleRefreshAt = now;
+      loadProfile({ soft: true });
     });

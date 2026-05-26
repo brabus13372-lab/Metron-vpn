@@ -11,32 +11,32 @@
 </head>
 <body>
 
-  <main class="container page">
+  <main class="container page profile-page">
 
     <!-- Шапка: аватар + имя + статус -->
-    <div class="card card-accent" style="display:flex; align-items:center; gap:var(--space-4); margin-bottom:var(--space-4);">
+    <div class="card card-accent profile-hero" style="display:flex; align-items:center; gap:var(--space-4); margin-bottom:var(--space-4);">
       <div class="avatar" id="user-avatar">?</div>
-      <div style="flex:1; min-width:0;">
-        <div id="user-name" style="font-weight:700; font-size:var(--text-base); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">—</div>
-        <div id="user-username" class="text-muted" style="font-size:var(--text-xs);">—</div>
+      <div class="profile-identity" style="flex:1; min-width:0;">
+        <div id="user-name" class="profile-name" style="font-weight:700; font-size:var(--text-base); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">—</div>
+        <div id="user-username" class="text-muted profile-username" style="font-size:var(--text-xs);">—</div>
       </div>
       <span class="badge badge-muted" id="status-badge">—</span>
     </div>
 
     <!-- Баланс -->
-    <div class="card" style="margin-bottom:var(--space-4);">
+    <div class="card profile-balance-card" style="margin-bottom:var(--space-4);">
       <div class="card-title" style="margin-bottom:var(--space-3);">Баланс</div>
-      <div style="display:flex; align-items:flex-end; justify-content:space-between;">
+      <div class="profile-balance-row" style="display:flex; align-items:flex-end; justify-content:space-between;">
         <div>
           <div class="balance-amount" id="balance-amount">—</div>
           <div class="balance-sub" id="balance-sub">—</div>
         </div>
-        <button class="btn btn-primary" onclick="openTopup()" style="flex-shrink:0;">Пополнить</button>
+        <button class="btn btn-primary profile-topup-btn" id="btn-topup" onclick="openTopup()" style="flex-shrink:0;">Пополнить</button>
       </div>
     </div>
 
     <!-- Статус подписки -->
-    <div class="card" id="card-status" style="margin-bottom:var(--space-4);">
+    <div class="card profile-status-card" id="card-status" style="margin-bottom:var(--space-4);">
       <div class="card-title" style="margin-bottom:var(--space-1);">Подписка</div>
       <div class="stat-row">
         <span class="stat-label">Статус</span>
@@ -57,7 +57,7 @@
     </div>
 
     <!-- Инструкция -->
-    <button class="btn-instruction" style="margin-bottom:var(--space-4);" onclick="openInstruction()">
+    <button class="btn-instruction" id="btn-instruction" style="margin-bottom:var(--space-4);" onclick="openInstruction()">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
         <circle cx="12" cy="12" r="10"/>
         <line x1="12" y1="16" x2="12" y2="12"/>
@@ -67,17 +67,17 @@
     </button>
 
     <!-- Устройства -->
-    <div class="card" style="margin-bottom:var(--space-4);">
-      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:var(--space-1);">
+    <div class="card profile-devices-card" style="margin-bottom:var(--space-4);">
+      <div class="profile-devices-header" style="display:flex; align-items:center; justify-content:space-between; margin-bottom:var(--space-1);">
         <div class="card-title">Устройства</div>
-        <button class="btn btn-ghost" onclick="openAddDevice()" style="padding:var(--space-2) var(--space-3); font-size:var(--text-xs); gap:var(--space-2);">
+        <button class="btn btn-ghost profile-add-device-btn" id="btn-add-device" onclick="openAddDevice()" style="padding:var(--space-2) var(--space-3); font-size:var(--text-xs); gap:var(--space-2);">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
           </svg>
           Добавить
         </button>
       </div>
-      <div id="devices-list">
+      <div id="devices-list" class="devices-list" aria-live="polite">
         <div class="stat-row" style="border-top:none;">
           <span class="stat-label" style="font-style:italic;">Загрузка...</span>
         </div>
@@ -209,7 +209,7 @@
 
       <!-- Действия -->
       <div class="modal-actions" style="margin-top:var(--space-5);">
-        <button class="btn btn-primary btn-full" onclick="copyKeyFromInstruction()">
+        <button class="btn btn-primary btn-full" id="btn-instr-copy" onclick="copyKeyFromInstruction()">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
           </svg>
