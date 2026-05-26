@@ -11,17 +11,17 @@
 </head>
 <body>
 
-  <main class="container page">
+  <main class="container page support-page">
 
-    <div style="margin-bottom: var(--space-6);">
-      <h1 style="font-size: var(--text-xl); font-weight: 700;">Поддержка</h1>
-      <p class="text-muted" style="font-size: var(--text-sm); margin-top: var(--space-1);">
+    <div class="support-hero" style="margin-bottom: var(--space-6);">
+      <h1 class="support-title" style="font-size: var(--text-xl); font-weight: 700;">Поддержка</h1>
+      <p class="text-muted support-subtitle" style="font-size: var(--text-sm); margin-top: var(--space-1);">
         Ответ придёт в боте — следите за уведомлениями
       </p>
     </div>
 
     <!-- Форма -->
-    <div class="card" style="margin-bottom: var(--space-4);">
+    <div class="card support-form-card" style="margin-bottom: var(--space-4);">
       <div class="card-title" style="margin-bottom: var(--space-3);">Новое обращение</div>
 
       <textarea
@@ -31,6 +31,7 @@
         maxlength="1000"
         oninput="onTextInput()"
       ></textarea>
+      <div class="support-text-hint">Чем подробнее описание, тем быстрее получится помочь.</div>
       <div class="char-counter" id="char-counter">0 / 1000</div>
 
       <!-- Прикрепить файл — скрыто визуально, логика сохранена -->
@@ -66,9 +67,12 @@
     </div>
 
     <!-- История -->
-    <div class="card">
-      <div class="card-title" style="margin-bottom: var(--space-1);">История обращений</div>
-      <div id="tickets-list">
+    <div class="card support-history-card">
+      <div class="support-history-header">
+        <div class="card-title" style="margin-bottom: var(--space-1);">История обращений</div>
+        <button class="btn btn-ghost support-refresh-btn" id="btn-refresh-tickets" onclick="refreshTickets()" type="button">Обновить</button>
+      </div>
+      <div id="tickets-list" class="tickets-list" aria-live="polite">
         <div style="padding:var(--space-4) 0; text-align:center;">
           <span style="font-size:var(--text-sm); color:var(--color-text-faint); font-style:italic;">Загрузка...</span>
         </div>

@@ -5,6 +5,7 @@ import html
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -82,13 +83,49 @@ app.add_middleware(
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _days_left(expire_at: datetime | None) -> int | None:
+def _calendar_days_left(expire_at: datetime | None) -> int | None:
     if expire_at is None:
         return None
     now = datetime.now(timezone.utc)
     if expire_at.tzinfo is None:
         expire_at = expire_at.replace(tzinfo=timezone.utc)
     return max((expire_at - now).days, 0)
+
+
+def _billing_days_left(balance_rub: float | Decimal | None, monthly_cost_rub: float | Decimal | None) -> int:
+    balance = Decimal(str(balance_rub or 0))
+    monthly_cost = Decimal(str(monthly_cost_rub or 0))
+    if balance <= 0 or monthly_cost <= 0:
+        return 0
+    daily_cost = monthly_cost / Decimal("30")
+    if daily_cost <= 0:
+        return 0
+    return max(int(balance / daily_cost), 0)
+
+
+def _effective_user_status(
+    raw_status: str | None,
+    balance_rub: float | Decimal | None,
+    devices_raw: list[dict],
+) -> str | None:
+    if raw_status != "ACTIVE":
+        return raw_status
+    if any(d.get("is_active") for d in devices_raw):
+        return raw_status
+    if Decimal(str(balance_rub or 0)) <= 0:
+        return "EXPIRED"
+    return raw_status
+
+
+def _profile_days_left(
+    status: str | None,
+    expire_at: datetime | None,
+    balance_rub: float | Decimal | None,
+    monthly_cost_rub: float | Decimal | None,
+) -> int | None:
+    if status == "TRIAL":
+        return _calendar_days_left(expire_at)
+    return _billing_days_left(balance_rub, monthly_cost_rub)
 
 
 def _build_devices(devices_raw: list[dict]) -> list[DeviceOut]:
@@ -161,16 +198,19 @@ async def get_user(user_id: int):
     monthly_cost = await get_user_total_monthly_cost(user_id)
     devices_raw = await get_user_devices(user_id)
     expire_at = user.get("expire_at")
+    balance_rub = float(balance or 0)
+    monthly_cost_rub = float(monthly_cost or 0)
+    effective_status = _effective_user_status(user.get("status"), balance_rub, devices_raw)
 
     return UserProfileOut(
         id=user_id,
         username=user.get("username"),
-        status=user.get("status"),
-        balance=float(balance or 0),
-        monthly_cost=float(monthly_cost or 0),
-        daily_cost=round(float(monthly_cost or 0) / 30, 2),
+        status=effective_status,
+        balance=balance_rub,
+        monthly_cost=monthly_cost_rub,
+        daily_cost=round(monthly_cost_rub / 30, 2),
         expire_at=expire_at,
-        days_left=_days_left(expire_at),
+        days_left=_profile_days_left(effective_status, expire_at, balance_rub, monthly_cost_rub),
         vless_link=user.get("vless_link"),
         devices=_build_devices(devices_raw),
     )
@@ -190,8 +230,11 @@ async def get_devices(user_id: int):
 @app.post("/api/user/{user_id}/devices", response_model=DeviceOut, tags=["devices"])
 async def create_device(user_id: int, body: DeviceCreateIn):
     user = await _get_user_or_404(user_id)
+    balance = await get_user_balance(user_id)
+    devices_raw = await get_user_devices(user_id)
+    effective_status = _effective_user_status(user.get("status"), float(balance or 0), devices_raw)
 
-    if user.get("status") not in ("ACTIVE", "TRIAL"):
+    if effective_status not in ("ACTIVE", "TRIAL"):
         raise HTTPException(status_code=403, detail="User is not active")
 
     vless_link, client_uuid, err = await add_device_to_panel(
@@ -295,8 +338,14 @@ async def hard_delete_device(user_id: int, device_id: int):
 )
 async def rotate_device_key(user_id: int, device_id: int):
     user = await _get_user_or_404(user_id)
+    balance = await get_user_balance(user_id)
+    effective_status = _effective_user_status(
+        user.get("status"),
+        float(balance or 0),
+        await get_user_devices(user_id),
+    )
 
-    if user.get("status") not in ("ACTIVE", "TRIAL"):
+    if effective_status not in ("ACTIVE", "TRIAL"):
         raise HTTPException(status_code=403, detail="User is not active")
 
     device = await get_device_by_id(device_id)
@@ -338,13 +387,20 @@ async def get_billing(user_id: int):
     balance = await get_user_balance(user_id)
     monthly_cost = await get_user_total_monthly_cost(user_id)
     expire_at = user.get("expire_at")
+    balance_rub = float(balance or 0)
+    monthly_cost_rub = float(monthly_cost or 0)
+    effective_status = _effective_user_status(
+        user.get("status"),
+        balance_rub,
+        await get_user_devices(user_id),
+    )
 
     return UserBillingOut(
-        balance=float(balance or 0),
-        monthly_cost=float(monthly_cost or 0),
-        daily_cost=round(float(monthly_cost or 0) / 30, 2),
+        balance=balance_rub,
+        monthly_cost=monthly_cost_rub,
+        daily_cost=round(monthly_cost_rub / 30, 2),
         expire_at=expire_at,
-        days_left=_days_left(expire_at),
+        days_left=_profile_days_left(effective_status, expire_at, balance_rub, monthly_cost_rub),
     )
 
 
