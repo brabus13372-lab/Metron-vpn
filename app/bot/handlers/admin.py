@@ -80,6 +80,21 @@ async def admin_give_balance(message: types.Message, bot: Bot) -> None:
         await message.answer("❌ Пользователь исчез из БД во время операции.")
         return
 
+    current_status = user_data.get("status", "NEW")
+    if current_status not in ("ACTIVE", "TRIAL"):
+        try:
+            await update_user_status(target_id, "ACTIVE")
+        except Exception as e:
+            logger.exception(
+                "admin_give_balance: status update failed user_id=%s",
+                target_id,
+            )
+            await message.answer(
+                f"⚠️ Баланс начислен, но статус не удалось обновить:\n<code>{html.escape(str(e))}</code>",
+                parse_mode="HTML",
+            )
+            return
+
     await message.answer(
         f"✅ Пользователю <code>{target_id}</code> начислено <b>{amount_rub:.2f} руб.</b>\n"
         f"💼 Новый баланс: <b>{new_balance_rub:.2f} руб.</b>",

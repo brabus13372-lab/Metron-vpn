@@ -15,7 +15,13 @@ from app.core.panel_client import (
     parse_inbound_settings,
     find_client_in_settings,
 )
-from app.db import activate_device, deactivate_device, get_user_devices
+from app.db import (
+    activate_device,
+    deactivate_device,
+    get_user_data_dict,
+    get_user_devices,
+    update_device_link,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -261,6 +267,8 @@ async def activate_all_user_devices(user_id: int):
         logger.info("panel.activate_devices.skip user_id=%s reason=no_devices", user_id)
         return 0, 0, []
 
+    user = await get_user_data_dict(user_id)
+    username = (user or {}).get("username") or f"user_{user_id}"
     success_count = 0
     fail_count = 0
     errors = []
@@ -300,6 +308,58 @@ async def activate_all_user_devices(user_id: int):
                 success_count += 1
             else:
                 err_msg = err_msg or "Unknown error"
+                if "client not found" in err_msg.lower():
+                    logger.warning(
+                        "panel.activate_device.missing user_id=%s device=%s uuid=%s — recreating",
+                        user_id, dev_name, client_uuid,
+                    )
+                    new_link, new_uuid, recreate_err = await add_device_to_panel(
+                        user_id=user_id,
+                        username=username,
+                        device_name=dev_name,
+                    )
+                    if recreate_err or not new_link or not new_uuid:
+                        recreate_err = recreate_err or "Failed to recreate missing panel client"
+                        logger.error(
+                            "panel.activate_device.recreate_fail user_id=%s device=%s old_uuid=%s msg=%s",
+                            user_id, dev_name, client_uuid, recreate_err,
+                        )
+                        fail_count += 1
+                        errors.append((dev_name, recreate_err))
+                        continue
+
+                    db_link_updated = await update_device_link(
+                        dev["id"],
+                        user_id,
+                        new_uuid,
+                        new_link,
+                    )
+                    if not db_link_updated:
+                        logger.error(
+                            "panel.activate_device.recreate_db_sync_fail user_id=%s device=%s old_uuid=%s new_uuid=%s",
+                            user_id, dev_name, client_uuid, new_uuid,
+                        )
+                        fail_count += 1
+                        errors.append((dev_name, "DB sync failed after client recreation"))
+                        continue
+
+                    db_activated = await activate_device(dev["id"], user_id)
+                    if not db_activated:
+                        logger.error(
+                            "panel.activate_device.recreate_db_activate_fail user_id=%s device=%s new_uuid=%s",
+                            user_id, dev_name, new_uuid,
+                        )
+                        fail_count += 1
+                        errors.append((dev_name, "DB activation failed after client recreation"))
+                        continue
+
+                    logger.warning(
+                        "panel.activate_device.recreate_ok user_id=%s device=%s old_uuid=%s new_uuid=%s",
+                        user_id, dev_name, client_uuid, new_uuid,
+                    )
+                    success_count += 1
+                    continue
+
                 logger.warning(
                     "panel.activate_device.fail user_id=%s device=%s uuid=%s msg=%s",
                     user_id, dev_name, client_uuid, err_msg,
