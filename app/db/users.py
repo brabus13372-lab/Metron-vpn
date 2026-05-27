@@ -200,6 +200,26 @@ async def set_reactivation_notification_pending(user_id: int, value: bool) -> No
         )
 
 
+async def get_users_bulk(user_ids: List[int]) -> Dict[int, Dict[str, Any]]:
+    """
+    Загружает нескольких пользователей одним запросом.
+    Возвращает {user_id: row_dict}.
+    """
+    if not user_ids:
+        return {}
+    async with get_db().connection() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT user_id, username, status, balance, expire_at,
+                   vless_link, uuid, notified, low_balance_notified
+            FROM users
+            WHERE user_id = ANY($1::bigint[])
+            """,
+            user_ids,
+        )
+    return {r["user_id"]: dict(r) for r in rows}
+
+
 async def get_expired_trial_users() -> List[int]:
     async with get_db().connection() as conn:
         rows = await conn.fetch(

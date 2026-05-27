@@ -226,13 +226,16 @@ async def panel_request(
                 )
                 session = await get_panel_session(force_relogin=True)
 
+                # Строим retry_kwargs заново чтобы не мутировать оригинал
+                # и избежать дублирования аргументов (timeout уже в kwargs).
+                retry_kwargs = {k: v for k, v in kwargs.items() if k != "headers"}
                 retry_headers = dict(kwargs.get("headers", {}))
                 _inject_csrf_token(session, retry_headers)
                 if use_manual_cookie_fallback:
                     _inject_manual_cookie_header(retry_headers)
-                kwargs["headers"] = retry_headers
+                retry_kwargs["headers"] = retry_headers
 
-                async with session.request(method.upper(), url, **kwargs) as retry_resp:
+                async with session.request(method.upper(), url, **retry_kwargs) as retry_resp:
                     retry_result = await _read_response(retry_resp)
                     if retry_resp.status >= 400:
                         logging.error(
@@ -241,6 +244,12 @@ async def panel_request(
                             endpoint,
                             str(retry_result)[:300],
                         )
+                    # Обновляем ручной cookie из retry-ответа — панель может
+                    # выдать новый Set-Cookie после re-login.
+                    extracted = _extract_manual_cookie_header(retry_resp)
+                    if extracted:
+                        global manual_cookie_header
+                        manual_cookie_header = extracted
                     return retry_result
 
             if resp.status >= 400:

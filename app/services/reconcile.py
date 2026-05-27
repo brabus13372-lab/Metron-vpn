@@ -48,7 +48,7 @@ from app.core.panel_client import (
 from app.core.vless import build_vless_link
 from app.db import (
     get_all_reconcile_devices,
-    get_user_data_dict,
+    get_users_bulk,
     update_device_link,
     activate_device,
     deactivate_device,
@@ -93,6 +93,14 @@ async def _recreate_missing_client(
     Создаём новый клиент с новым UUID и обновляем БД.
     Возвращает True при успехе, False при ошибке.
     """
+    # Никогда не пересоздаём клиент, которого пользователь отключил вручную.
+    if dev.get("disabled_reason") == "user_request":
+        logger.info(
+            "reconcile.recreate.skip_user_request user_id=%s device=%s uuid=%s",
+            user_id, dev["device_name"], dev["client_uuid"],
+        )
+        return True  # "успех" — состояние консистентно, делать нечего
+
     old_uuid = dev["client_uuid"]
     device_name = dev["device_name"]
     new_uuid = str(uuid.uuid4())
@@ -151,6 +159,10 @@ async def reconcile_once() -> None:
     db_devices = await get_all_reconcile_devices()
     db_uuids: set[str] = {d["client_uuid"] for d in db_devices}
 
+    # Один батч-запрос для всех пользователей вместо N запросов по одному.
+    unique_user_ids = list({d["user_id"] for d in db_devices})
+    users_map: dict[int, dict] = await get_users_bulk(unique_user_ids)
+
     # Orphans: есть в панели, нет в БД → отключаем (enable=False).
     # Не удаляем — мог быть добавлен вручную, пусть админ разбирается по логам.
     orphan_uuids = set(panel_clients.keys()) - db_uuids
@@ -187,7 +199,7 @@ async def reconcile_once() -> None:
         device_name = dev["device_name"]
         db_is_active: bool = dev.get("is_active", False)
 
-        user = await get_user_data_dict(user_id)
+        user = users_map.get(user_id)
         if not user:
             logger.warning(
                 "reconcile.skip_device user_id=%s device=%s reason=user_not_found",
