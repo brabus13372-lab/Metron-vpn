@@ -42,6 +42,7 @@ Metron-vpn/
 ├── app/
 │   ├── core/
 │   │   ├── panel_client.py          # aiohttp client for 3x-ui REST API
+│   │   ├── telegram_auth.py         # HMAC-SHA256 Telegram initData validation
 │   │   ├── logging_sanitizer.py     # Global log filter (masks tokens/cookies)
 │   │   └── vless.py                 # VLESS link builder
 │   ├── db/
@@ -52,6 +53,7 @@ Metron-vpn/
 │   │   └── payments.py              # payment idempotency queries
 │   ├── schemas/
 │   │   └── user.py                  # Pydantic request / response models
+│   ├── deps.py                      # FastAPI deps: AuthUserId (initData verification)
 │   ├── services/
 │   │   ├── billing.py               # BillingEngine: daily charge + TRIAL cycle
 │   │   ├── notifications.py         # APScheduler subscription reminders
@@ -102,7 +104,7 @@ Metron-vpn/
 
 **Data flows:**
 - `Telegram → aiogram handlers → services → db / panel_client`
-- `WebApp → FastAPI (api.py) → db / panel_client → 3x-ui`
+- `WebApp → FastAPI (api.py) [AuthUserId dep] → db / panel_client → 3x-ui`
 
 **Stable production entrypoints:**
 - `main.py` — service entrypoint for `systemd`
@@ -247,9 +249,10 @@ The WebApp communicates with the bot via REST API (`app/api.py`).
 
 **Logic:**
 1. Once a day deducts `SUM(devices.monthly_cost) / 30` from the user's balance
-2. On zero balance — suspends the subscription (`status = SUSPENDED`)
+2. On zero balance — suspends the subscription, all devices deactivated (`status = EXPIRED`)
 3. TRIAL: on expiry — auto-converts to paid or deactivates
-4. Notifications: APScheduler sends reminders before access expires
+4. **Auto-recovery on top-up:** if the user's status was `EXPIRED`, `INACTIVE`, or `NEW`, it is atomically set to `ACTIVE` in the same transaction as the balance update — no race condition possible
+5. Notifications: APScheduler sends reminders before access expires (early warning + critical)
 
 > ⚠️ **Critical:** billing only counts **records in the `devices` table**.  
 > The account key (`users.vless_link`) **is not billed**.  
@@ -267,6 +270,16 @@ The WebApp communicates with the bot via REST API (`app/api.py`).
 - JSON fields: `password`, `token`, `key`
 - Runtime secrets from `app.config`
 
+### Telegram WebApp Authentication (IDOR protection)
+
+All `/api/user/{id}/*` endpoints verify the `X-Telegram-Init-Data` header using HMAC-SHA256 (`app/core/telegram_auth.py`).  
+The validated `user_id` extracted from `initData` must match the `{id}` path parameter.  
+Requests without valid `initData` or with a mismatched user ID are rejected with `403`.
+
+- `app/core/telegram_auth.py` — core HMAC-SHA256 validation logic  
+- `app/deps.py` — `AuthUserId` FastAPI dependency used by all protected endpoints  
+- `webapp/assets/js/api.js` — automatically injects `X-Telegram-Init-Data` into every request
+
 ### SSL
 
 > ⚠️ Requests to 3x-ui are made with `verify=False` (aiohttp) for self-signed certificates.  
@@ -279,6 +292,13 @@ The WebApp communicates with the bot via REST API (`app/api.py`).
 | `POST /rotate-key` | `409` | User already has active devices |
 | `DELETE /devices/{id}` | `409` | Deleting the last active device |
 | `POST /devices` | `403` | User status is not `ACTIVE` / `TRIAL` |
+| `POST /devices` | `409` | Device limit reached (max 5 per user) |
+| `POST /support` | `429` | Rate limit: max 1 ticket per 60 seconds |
+| All `/api/user/{id}/*` | `403` | `initData` invalid or `user_id` mismatch |
+
+Input validation:
+- `device_name` — 1–50 characters (Pydantic `Field`, enforced before panel call)
+- Support message — 5–1000 characters (DB `CHECK` constraint + FastAPI `Form` validation)
 
 > All guards are enforced server-side — WebApp client checks are not the only protection.
 

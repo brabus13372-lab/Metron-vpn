@@ -65,6 +65,10 @@ _MAX_DEVICES_PER_USER = 5
 _ADMIN_USER_ERROR_COOLDOWN_SEC = 120.0
 _admin_user_error_last_sent: dict[tuple[Any, ...], float] = {}
 
+# Rate-limit: не чаще одного тикета в 60 секунд с одного user_id
+_SUPPORT_TICKET_COOLDOWN_SEC = 60.0
+_support_ticket_last_sent: dict[int, float] = {}
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -657,6 +661,17 @@ async def submit_support_ticket(
     message: str = Form(..., min_length=5, max_length=1000),
     files: Optional[List[UploadFile]] = File(default=None),
 ):
+    now = monotonic()
+    last = _support_ticket_last_sent.get(user_id)
+    if last is not None and now - last < _SUPPORT_TICKET_COOLDOWN_SEC:
+        retry_after = int(_SUPPORT_TICKET_COOLDOWN_SEC - (now - last)) + 1
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many requests. Try again in {retry_after} seconds.",
+            headers={"Retry-After": str(retry_after)},
+        )
+    _support_ticket_last_sent[user_id] = now
+
     user = await _get_user_or_404(user_id)
 
     files_meta: List[Dict[str, Any]] = []

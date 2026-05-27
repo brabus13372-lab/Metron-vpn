@@ -116,6 +116,8 @@ async def check_notifications(bot: Bot) -> None:
 async def _check_trial_expirations(bot: Bot, now: datetime, soon: datetime) -> None:
     db = get_db()
 
+    # Шаг 1: читаем кандидатов и сбрасываем устаревший notified-флаг —
+    # всё в одной короткой транзакции без сетевых вызовов.
     async with db.transaction() as conn:
         rows = await conn.fetch(
             """
@@ -137,49 +139,52 @@ async def _check_trial_expirations(bot: Bot, now: datetime, soon: datetime) -> N
             soon,
         )
 
-        for row in rows:
-            user_id = row["user_id"]
-            device_count = row["device_count"] or 0
-            devices_monthly_cents = row["devices_monthly_cost"] or 0
-
-            try:
-                await bot.send_message(
-                    user_id,
-                    _build_trial_message(device_count, devices_monthly_cents),
-                    reply_markup=webapp_button(WEBAPP_URL, user_id),
-                    parse_mode="HTML",
-                )
-                await conn.execute(
-                    "UPDATE users SET notified = TRUE WHERE user_id = $1",
-                    user_id,
-                )
-            except Exception as e:
-                logger.error(
-                    "notify_trial_expiration_failed user_id=%s err=%s",
-                    user_id,
-                    e,
-                    exc_info=True,
-                )
-
+        # Сбрасываем notified только у тех, чей триал уже истёк —
+        # не трогаем ACTIVE/INACTIVE чтобы не делать лишний full-scan.
         await conn.execute(
             """
             UPDATE users
             SET notified = FALSE
-            WHERE (
-                status = 'TRIAL'
-                AND notified = TRUE
-                AND expire_at < $1
-            )
-            OR status <> 'TRIAL'
+            WHERE status = 'TRIAL'
+              AND notified = TRUE
+              AND expire_at < $1
             """,
             now,
         )
+
+    # Шаг 2: отправляем Telegram-сообщения и фиксируем флаги вне транзакции,
+    # по одной операции — не блокируем пул соединений на время сетевых вызовов.
+    for row in rows:
+        user_id = row["user_id"]
+        device_count = row["device_count"] or 0
+        devices_monthly_cents = row["devices_monthly_cost"] or 0
+
+        try:
+            await bot.send_message(
+                user_id,
+                _build_trial_message(device_count, devices_monthly_cents),
+                reply_markup=webapp_button(WEBAPP_URL, user_id),
+                parse_mode="HTML",
+            )
+            async with db.transaction() as conn:
+                await conn.execute(
+                    "UPDATE users SET notified = TRUE WHERE user_id = $1",
+                    user_id,
+                )
+        except Exception as e:
+            logger.error(
+                "notify_trial_expiration_failed user_id=%s err=%s",
+                user_id,
+                e,
+                exc_info=True,
+            )
 
 
 async def _check_low_balance(bot: Bot) -> None:
     db = get_db()
 
-    async with db.transaction() as conn:
+    # Шаг 1: читаем кандидатов в короткой транзакции без сетевых вызовов.
+    async with db.connection() as conn:
         rows = await conn.fetch(
             """
             SELECT
@@ -201,77 +206,77 @@ async def _check_low_balance(bot: Bot) -> None:
             """
         )
 
-        for row in rows:
-            user_id = row["user_id"]
-            balance_cents = row["balance"] or 0
-            low_balance_notified = row["low_balance_notified"]
-            low_balance_critical_notified = row["low_balance_critical_notified"]
-            total_device_count = row["total_device_count"] or 0
-            device_count = row["active_device_count"] or 0
-            monthly_cost_cents = row["monthly_cost_cents"] or 0
+    # Шаг 2: определяем что делать с каждым пользователем.
+    # Флаги сбрасываем без Telegram-вызовов. Уведомления — отдельно.
+    flag_resets: list[int] = []
+    to_notify: list[tuple] = []  # (user_id, balance_cents, device_count, monthly_cost_cents, is_critical)
 
-            # Юзер без устройств — сбрасываем low-balance флаги.
-            if total_device_count <= 0:
-                if low_balance_notified or low_balance_critical_notified:
-                    await conn.execute(
-                        """
-                        UPDATE users
-                        SET low_balance_notified = FALSE,
-                            low_balance_critical_notified = FALSE
-                        WHERE user_id = $1
-                        """,
-                        user_id,
-                    )
-                continue
+    for row in rows:
+        user_id = row["user_id"]
+        balance_cents = row["balance"] or 0
+        low_balance_notified = row["low_balance_notified"]
+        low_balance_critical_notified = row["low_balance_critical_notified"]
+        total_device_count = row["total_device_count"] or 0
+        device_count = row["active_device_count"] or 0
+        monthly_cost_cents = row["monthly_cost_cents"] or 0
 
-            # У пользователя могут быть только неактивные устройства после
-            # временной блокировки. В таком случае low-balance уведомления
-            # не шлём и не сбрасываем флаги, пока доступ не восстановится.
-            if device_count <= 0 or monthly_cost_cents <= 0:
-                continue
+        if total_device_count <= 0:
+            if low_balance_notified or low_balance_critical_notified:
+                flag_resets.append(user_id)
+            continue
 
-            # Hard suspension обрабатывается billing-слоем сразу в момент
-            # деактивации. Здесь оставляем только предупреждения "до отключения".
-            if balance_cents <= 0:
-                continue
+        if device_count <= 0 or monthly_cost_cents <= 0:
+            continue
 
-            days_left = _days_left(balance_cents, monthly_cost_cents)
+        if balance_cents <= 0:
+            continue
 
-            # Баланс восстановился выше раннего порога — сбрасываем оба warning-флага.
-            if days_left > LOW_BALANCE_DAYS_THRESHOLD_EARLY:
-                if low_balance_notified or low_balance_critical_notified:
-                    await conn.execute(
-                        """
-                        UPDATE users
-                        SET low_balance_notified = FALSE,
-                            low_balance_critical_notified = FALSE
-                        WHERE user_id = $1
-                        """,
-                        user_id,
-                    )
-                continue
+        days_left = _days_left(balance_cents, monthly_cost_cents)
 
-            if days_left <= LOW_BALANCE_DAYS_THRESHOLD and low_balance_critical_notified:
-                continue
+        if days_left > LOW_BALANCE_DAYS_THRESHOLD_EARLY:
+            if low_balance_notified or low_balance_critical_notified:
+                flag_resets.append(user_id)
+            continue
 
-            try:
-                is_critical = days_left <= LOW_BALANCE_DAYS_THRESHOLD
-                if not is_critical and low_balance_notified:
-                    continue
+        if days_left <= LOW_BALANCE_DAYS_THRESHOLD and low_balance_critical_notified:
+            continue
 
-                await bot.send_message(
-                    user_id,
-                    _build_low_balance_message(
-                        balance_cents=balance_cents,
-                        device_count=device_count,
-                        monthly_cost_cents=monthly_cost_cents,
-                        days_left=days_left,
-                        critical=is_critical,
-                    ),
-                    reply_markup=webapp_button(WEBAPP_URL, user_id),
-                    parse_mode="HTML",
-                )
+        is_critical = days_left <= LOW_BALANCE_DAYS_THRESHOLD
+        if not is_critical and low_balance_notified:
+            continue
 
+        to_notify.append((user_id, balance_cents, device_count, monthly_cost_cents, days_left, is_critical))
+
+    # Сбрасываем флаги одним запросом — без Telegram-вызовов.
+    if flag_resets:
+        async with db.transaction() as conn:
+            await conn.execute(
+                """
+                UPDATE users
+                SET low_balance_notified = FALSE,
+                    low_balance_critical_notified = FALSE
+                WHERE user_id = ANY($1::bigint[])
+                """,
+                flag_resets,
+            )
+
+    # Шаг 3: отправляем уведомления вне транзакции — одно соединение на уведомление.
+    for user_id, balance_cents, device_count, monthly_cost_cents, days_left, is_critical in to_notify:
+        try:
+            await bot.send_message(
+                user_id,
+                _build_low_balance_message(
+                    balance_cents=balance_cents,
+                    device_count=device_count,
+                    monthly_cost_cents=monthly_cost_cents,
+                    days_left=days_left,
+                    critical=is_critical,
+                ),
+                reply_markup=webapp_button(WEBAPP_URL, user_id),
+                parse_mode="HTML",
+            )
+
+            async with db.transaction() as conn:
                 if is_critical:
                     await conn.execute(
                         """
@@ -295,13 +300,13 @@ async def _check_low_balance(bot: Bot) -> None:
                         "notify_low_balance_early.sent user_id=%s days_left=%s",
                         user_id, days_left,
                     )
-            except Exception as e:
-                logger.error(
-                    "notify_low_balance_failed user_id=%s err=%s",
-                    user_id,
-                    e,
-                    exc_info=True,
-                )
+        except Exception as e:
+            logger.error(
+                "notify_low_balance_failed user_id=%s err=%s",
+                user_id,
+                e,
+                exc_info=True,
+            )
 
 
 async def check_reactivation_notifications(bot: Bot) -> None:

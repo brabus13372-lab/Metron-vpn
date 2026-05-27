@@ -42,6 +42,7 @@ Metron-vpn/
 ├── app/
 │   ├── core/
 │   │   ├── panel_client.py          # aiohttp-клиент для 3x-ui REST API
+│   │   ├── telegram_auth.py         # HMAC-SHA256 валидация Telegram initData
 │   │   ├── logging_sanitizer.py     # Глобальный фильтр логов (маскирует токены/куки)
 │   │   └── vless.py                 # Сборка VLESS-ссылки
 │   ├── db/
@@ -52,6 +53,7 @@ Metron-vpn/
 │   │   └── payments.py              # идемпотентные запросы платежей
 │   ├── schemas/
 │   │   └── user.py                  # Pydantic-модели запросов / ответов
+│   ├── deps.py                      # FastAPI зависимости: AuthUserId (проверка initData)
 │   ├── services/
 │   │   ├── billing.py               # BillingEngine: ежедневное списание + TRIAL-цикл
 │   │   ├── notifications.py         # APScheduler: напоминания по подписке
@@ -102,7 +104,7 @@ Metron-vpn/
 
 **Потоки данных:**
 - `Telegram → aiogram handlers → services → db / panel_client`
-- `WebApp → FastAPI (api.py) → db / panel_client → 3x-ui`
+- `WebApp → FastAPI (api.py) [AuthUserId dep] → db / panel_client → 3x-ui`
 
 **Стабильные продовые entrypoints:**
 - `main.py` — точка входа сервиса для `systemd`
@@ -247,9 +249,10 @@ WebApp взаимодействует с ботом через REST API (`app/ap
 
 **Логика:**
 1. Раз в сутки списывает `SUM(devices.monthly_cost) / 30` с баланса пользователя
-2. При нулевом балансе — деактивирует подписку (`status = SUSPENDED`)
+2. При нулевом балансе — деактивирует все устройства, статус переходит в `EXPIRED`
 3. TRIAL: по истечении срока — автоматический перевод на платную подписку или деактивация
-4. Уведомления: APScheduler отправляет напоминания до истечения доступа
+4. **Автовосстановление при пополнении:** если статус пользователя был `EXPIRED`, `INACTIVE` или `NEW`, он атомарно переводится в `ACTIVE` в той же транзакции что и зачисление баланса — race condition исключён
+5. Уведомления: APScheduler отправляет напоминания до истечения доступа (раннее предупреждение + критическое)
 
 > ⚠️ **Критически важно:** биллинг считает **только записи в таблице `devices`**.  
 > Аккаунтный ключ (`users.vless_link`) **не тарифицируется**.  
@@ -267,6 +270,16 @@ WebApp взаимодействует с ботом через REST API (`app/ap
 - JSON-поля: `password`, `token`, `key`
 - Runtime-секреты из `app.config`
 
+### Аутентификация Telegram WebApp (защита от IDOR)
+
+Все эндпоинты `/api/user/{id}/*` проверяют заголовок `X-Telegram-Init-Data` через HMAC-SHA256 (`app/core/telegram_auth.py`).  
+Извлечённый из `initData` `user_id` должен совпадать с `{id}` в пути запроса.  
+Запросы без валидного `initData` или с несовпадающим `user_id` отклоняются с `403`.
+
+- `app/core/telegram_auth.py` — ядро HMAC-SHA256 валидации
+- `app/deps.py` — зависимость `AuthUserId`, применяемая на всех защищённых эндпоинтах
+- `webapp/assets/js/api.js` — автоматически подставляет `X-Telegram-Init-Data` в каждый запрос
+
 ### SSL
 
 > ⚠️ Запросы к 3x-ui выполняются с `ssl=False` (aiohttp) для самоподписанных сертификатов.  
@@ -279,6 +292,13 @@ WebApp взаимодействует с ботом через REST API (`app/ap
 | `POST /rotate-key` | `409` | У пользователя уже есть записи в `devices` |
 | `DELETE /devices/{id}` | `409` | Удаляется последнее активное устройство |
 | `POST /devices` | `403` | Статус пользователя не `ACTIVE` / `TRIAL` |
+| `POST /devices` | `409` | Достигнут лимит устройств (макс. 5 на пользователя) |
+| `POST /support` | `429` | Rate limit: не чаще 1 тикета в 60 секунд |
+| Все `/api/user/{id}/*` | `403` | `initData` невалиден или `user_id` не совпадает |
+
+Валидация ввода:
+- `device_name` — от 1 до 50 символов (Pydantic `Field`, проверяется до вызова панели)
+- Сообщение тикета — от 5 до 1000 символов (DB `CHECK` + FastAPI `Form`)
 
 > Все гарды продублированы на сервере — клиентская проверка в WebApp не является единственной защитой.
 
