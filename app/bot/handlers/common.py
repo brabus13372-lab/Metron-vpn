@@ -1,3 +1,4 @@
+import asyncio
 import html
 import logging
 from datetime import datetime, timedelta, timezone
@@ -6,7 +7,7 @@ from typing import Union
 
 from aiogram import F, types
 from aiogram.filters import Command, CommandObject
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardRemove
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.config import WEBAPP_URL, ADMIN_ID, TRIAL_DAYS
@@ -156,6 +157,13 @@ async def start_cmd(message: types.Message, command: CommandObject) -> None:
         parse_mode="HTML",
         disable_web_page_preview=True,
     )
+    # Снимаем старую reply-клавиатуру (Профиль / Инструкция / Поддержка), если осталась у юзера
+    cleanup = await message.answer(".", reply_markup=ReplyKeyboardRemove())
+    await asyncio.sleep(0.3)
+    try:
+        await cleanup.delete()
+    except Exception:
+        pass
 
 
 @dp.callback_query(F.data == "show_instruction")

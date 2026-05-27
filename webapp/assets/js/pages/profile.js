@@ -1,11 +1,15 @@
-    import { fetchUserData, rotateDeviceKey as apiRotateDeviceKey, fetchBotConfig } from '../api.js';
+    import {
+      fetchUserData,
+      rotateDeviceKey as apiRotateDeviceKey,
+      fetchBotConfig,
+      buildAuthHeaders,
+    } from '../api.js';
 
     const tg = window.Telegram?.WebApp;
     if (tg) { tg.expand(); tg.ready(); tg.enableClosingConfirmation(); }
 
     const tgUser = tg?.initDataUnsafe?.user;
-    const params = new URLSearchParams(window.location.search);
-    const USER_ID = tgUser?.id ?? (params.get('uid') ? parseInt(params.get('uid')) : null);
+    const USER_ID = tgUser?.id ?? null;
     const PROFILE_LOADING_IDS = [
       'user-name',
       'user-username',
@@ -422,7 +426,10 @@
       btn.disabled = true;
       btn.innerHTML = `<div class="spinner"></div> Отключаем...`;
       try {
-        const res = await fetch(`/api/user/${USER_ID}/devices/${id}`, { method: 'DELETE' });
+        const res = await fetch(`/api/user/${USER_ID}/devices/${id}`, {
+          method: 'DELETE',
+          headers: buildAuthHeaders(),
+        });
         if (!res.ok) {
           const errBody = await res.json().catch(() => ({}));
           throw new Error(errBody?.detail || String(res.status));
@@ -458,7 +465,10 @@
         btn.disabled = true;
         btn.innerHTML = `<div class="spinner"></div> Удаляем...`;
         try {
-            const res = await fetch(`/api/user/${USER_ID}/devices/${id}/hard`, { method: 'DELETE' });
+            const res = await fetch(`/api/user/${USER_ID}/devices/${id}/hard`, {
+              method: 'DELETE',
+              headers: buildAuthHeaders(),
+            });
             if (!res.ok) {
             const errBody = await res.json().catch(() => ({}));
             throw new Error(errBody?.detail || String(res.status));
@@ -491,7 +501,7 @@
       try {
         const res = await fetch(`/api/user/${USER_ID}/devices`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({ device_name: name }),
         });
         if (!res.ok) {

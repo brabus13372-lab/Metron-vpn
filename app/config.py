@@ -39,6 +39,9 @@ TZ_MSK = ZoneInfo("Europe/Moscow")
 
 TRIAL_DAYS = int(os.getenv("TRIAL_DAYS", "1"))
 
+# Максимальный возраст Telegram WebApp initData (сек.). 0 = не проверять срок.
+WEBAPP_INIT_MAX_AGE_SEC = int(os.getenv("WEBAPP_INIT_MAX_AGE_SEC", "86400"))
+
 # --- RECONCILE ---
 # dev: 300 (5 мин), prod с большим парком: 900 (15 мин)
 RECONCILE_INTERVAL_SEC = int(os.getenv("RECONCILE_INTERVAL_SEC", "300"))

@@ -1,11 +1,9 @@
+    import { buildAuthHeaders } from '../api.js';
+
     const tg = window.Telegram?.WebApp;
     if (tg) { tg.expand(); tg.ready(); }
 
-    // Telegram initData имеет приоритет; ?uid=123 — fallback для dev/local
-    const _tgId  = tg?.initDataUnsafe?.user?.id ?? null;
-    const _params = new URLSearchParams(window.location.search);
-    const _uidParam = _params.get('uid') ? parseInt(_params.get('uid'), 10) : null;
-    const USER_ID = _tgId ?? _uidParam;
+    const USER_ID = tg?.initDataUnsafe?.user?.id ?? null;
 
     let lastSentAt = 0;
     const COOLDOWN_MS = 10_000;
@@ -185,6 +183,7 @@
 
         const res = await fetch(`/api/user/${USER_ID}/support`, {
           method: 'POST',
+          headers: buildAuthHeaders(),
           body: form,
         });
         if (!res.ok) {
@@ -224,7 +223,9 @@
       setTicketsLoading(true, { soft: soft && _ticketsLoaded });
 
       try {
-        const res = await fetch(`/api/user/${USER_ID}/support`);
+        const res = await fetch(`/api/user/${USER_ID}/support`, {
+          headers: buildAuthHeaders(),
+        });
         if (!res.ok) throw new Error(await parseApiError(res));
         const data = await res.json();
         if (seq !== _ticketsLoadSeq) return;
@@ -353,3 +354,6 @@
       _lastVisibleRefreshAt = now;
       loadTickets({ soft: true });
     });
+
+    window.sendTicket = sendTicket;
+    window.refreshTickets = refreshTickets;

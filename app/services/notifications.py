@@ -3,8 +3,8 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 
 from aiogram import Bot
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-
+from app.bot.keyboards import webapp_button
+from app.config import WEBAPP_URL
 from app.db import get_db
 
 logger = logging.getLogger(__name__)
@@ -14,15 +14,6 @@ LOW_BALANCE_DAYS_THRESHOLD = Decimal("2")
 # Уведомление за 5 дней (первое — раннее предупреждение)
 LOW_BALANCE_DAYS_THRESHOLD_EARLY = Decimal("5")
 DAYS_IN_MONTH = Decimal("30")
-
-
-def _payment_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="💳 Пополнить баланс", callback_data="buy_vpn")],
-            [InlineKeyboardButton(text="📖 Инструкция", callback_data="show_instruction")],
-        ]
-    )
 
 
 def _cents_to_decimal(cents: int) -> Decimal:
@@ -155,7 +146,7 @@ async def _check_trial_expirations(bot: Bot, now: datetime, soon: datetime) -> N
                 await bot.send_message(
                     user_id,
                     _build_trial_message(device_count, devices_monthly_cents),
-                    reply_markup=_payment_keyboard(),
+                    reply_markup=webapp_button(WEBAPP_URL, user_id),
                     parse_mode="HTML",
                 )
                 await conn.execute(
@@ -277,7 +268,7 @@ async def _check_low_balance(bot: Bot) -> None:
                         days_left=days_left,
                         critical=is_critical,
                     ),
-                    reply_markup=_payment_keyboard(),
+                    reply_markup=webapp_button(WEBAPP_URL, user_id),
                     parse_mode="HTML",
                 )
 

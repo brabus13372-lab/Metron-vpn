@@ -85,7 +85,7 @@ def webapp_button(webapp_url: str, user_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(
-            text="🌐 Открыть личный кабинет",
+            text="🌐 Личный кабинет",
             web_app=WebAppInfo(url=_build_webapp_url(webapp_url, user_id)),
         )
     )

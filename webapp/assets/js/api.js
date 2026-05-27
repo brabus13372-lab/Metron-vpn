@@ -4,6 +4,21 @@
 
 const BASE_URL = '';
 
+/** Сырой initData из Telegram WebApp (для HMAC-проверки на бэкенде). */
+export function getTelegramInitData() {
+  return window.Telegram?.WebApp?.initData || '';
+}
+
+/** Заголовки авторизации для всех запросов к /api/user/* */
+export function buildAuthHeaders(extra = {}) {
+  const headers = { ...extra };
+  const initData = getTelegramInitData();
+  if (initData) {
+    headers['X-Telegram-Init-Data'] = initData;
+  }
+  return headers;
+}
+
 async function parseApiError(res) {
   try {
     const body = await res.json();
@@ -15,7 +30,8 @@ async function parseApiError(res) {
 }
 
 async function request(path, options = {}) {
-  const res = await fetch(`${BASE_URL}${path}`, options);
+  const headers = buildAuthHeaders(options.headers || {});
+  const res = await fetch(`${BASE_URL}${path}`, { ...options, headers });
   if (!res.ok) throw new Error(await parseApiError(res));
   return res.json();
 }

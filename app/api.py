@@ -7,10 +7,10 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
 from time import monotonic
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -53,11 +53,15 @@ from app.services.vpn import (
 from app.services.billing import billing_engine
 from app.config import BOT_NAME, ADMIN_ID
 from app.bot.bot import bot
+from app.deps import verify_telegram_user_access
+
+AuthUserId = Annotated[int, Depends(verify_telegram_user_access)]
 
 logger = logging.getLogger(__name__)
 
 _SUPPORT_MAX_FILES = 5
 _SUPPORT_MAX_FILE_SIZE = 10 * 1024 * 1024
+_MAX_DEVICES_PER_USER = 5
 _ADMIN_USER_ERROR_COOLDOWN_SEC = 120.0
 _admin_user_error_last_sent: dict[tuple[Any, ...], float] = {}
 
@@ -79,7 +83,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["GET", "POST", "DELETE"],
-    allow_headers=["*"],
+    allow_headers=["*", "X-Telegram-Init-Data", "Authorization"],
 )
 
 
@@ -272,7 +276,7 @@ async def get_config():
 # ---------------------------------------------------------------------------
 
 @app.get("/api/user/{user_id}", response_model=UserProfileOut, tags=["profile"])
-async def get_user(user_id: int):
+async def get_user(user_id: AuthUserId):
     user = await _get_user_or_404(user_id)
     balance = await get_user_balance(user_id)
     monthly_cost = await get_user_total_monthly_cost(user_id)
@@ -301,14 +305,14 @@ async def get_user(user_id: int):
 # ---------------------------------------------------------------------------
 
 @app.get("/api/user/{user_id}/devices", response_model=list[DeviceOut], tags=["devices"])
-async def get_devices(user_id: int):
+async def get_devices(user_id: AuthUserId):
     await _get_user_or_404(user_id)
     devices_raw = await get_user_devices(user_id)
     return _build_devices(devices_raw)
 
 
 @app.post("/api/user/{user_id}/devices", response_model=DeviceOut, tags=["devices"])
-async def create_device(user_id: int, body: DeviceCreateIn):
+async def create_device(user_id: AuthUserId, body: DeviceCreateIn):
     user = await _get_user_or_404(user_id)
     balance = await get_user_balance(user_id)
     devices_raw = await get_user_devices(user_id)
@@ -324,6 +328,15 @@ async def create_device(user_id: int, body: DeviceCreateIn):
                 f"raw_status={user.get('status')}, effective_status={effective_status}, "
                 f"balance={float(balance or 0):.2f}, {_device_state_summary(devices_raw)}"
             ),
+        )
+
+    if len(devices_raw) >= _MAX_DEVICES_PER_USER:
+        await _raise_user_action_error(
+            action="create_device",
+            user_id=user_id,
+            status_code=409,
+            detail=f"Device limit reached ({_MAX_DEVICES_PER_USER})",
+            extra=f"device_count={len(devices_raw)}",
         )
 
     vless_link, client_uuid, err = await add_device_to_panel(
@@ -371,7 +384,7 @@ async def create_device(user_id: int, body: DeviceCreateIn):
 
 
 @app.delete("/api/user/{user_id}/devices/{device_id}", response_model=OkResponse, tags=["devices"])
-async def delete_device(user_id: int, device_id: int):
+async def delete_device(user_id: AuthUserId, device_id: int):
     device = await get_device_by_id(device_id)
     if not device or device["user_id"] != user_id:
         raise HTTPException(status_code=404, detail="Device not found")
@@ -407,7 +420,7 @@ async def delete_device(user_id: int, device_id: int):
 
 
 @app.delete("/api/user/{user_id}/devices/{device_id}/hard", response_model=OkResponse, tags=["devices"])
-async def hard_delete_device(user_id: int, device_id: int):
+async def hard_delete_device(user_id: AuthUserId, device_id: int):
     device = await get_device_by_id(device_id)
     if not device or device["user_id"] != user_id:
         raise HTTPException(status_code=404, detail="Device not found")
@@ -443,7 +456,7 @@ async def hard_delete_device(user_id: int, device_id: int):
     response_model=RotateDeviceKeyResponse,
     tags=["devices"],
 )
-async def rotate_device_key(user_id: int, device_id: int):
+async def rotate_device_key(user_id: AuthUserId, device_id: int):
     user = await _get_user_or_404(user_id)
     balance = await get_user_balance(user_id)
     effective_status = _effective_user_status(
@@ -525,7 +538,7 @@ async def rotate_device_key(user_id: int, device_id: int):
 # ---------------------------------------------------------------------------
 
 @app.get("/api/user/{user_id}/billing", response_model=UserBillingOut, tags=["billing"])
-async def get_billing(user_id: int):
+async def get_billing(user_id: AuthUserId):
     user = await _get_user_or_404(user_id)
     balance = await get_user_balance(user_id)
     monthly_cost = await get_user_total_monthly_cost(user_id)
@@ -557,7 +570,7 @@ async def get_billing(user_id: int):
 # ---------------------------------------------------------------------------
 
 @app.post("/api/user/{user_id}/rotate-key", response_model=RotateKeyResponse, tags=["security"])
-async def rotate_key(user_id: int):
+async def rotate_key(user_id: AuthUserId):
     user = await _get_user_or_404(user_id)
     status = user.get("status")
 
@@ -640,7 +653,7 @@ async def rotate_key(user_id: int):
     status_code=201,
 )
 async def submit_support_ticket(
-    user_id: int,
+    user_id: AuthUserId,
     message: str = Form(..., min_length=5, max_length=1000),
     files: Optional[List[UploadFile]] = File(default=None),
 ):
@@ -729,7 +742,7 @@ async def submit_support_ticket(
     response_model=SupportTicketListOut,
     tags=["support"],
 )
-async def get_support_tickets(user_id: int):
+async def get_support_tickets(user_id: AuthUserId):
     await _get_user_or_404(user_id)
     raw = await get_user_tickets(user_id, limit=20)
     tickets = [
