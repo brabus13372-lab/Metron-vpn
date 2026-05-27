@@ -348,6 +348,25 @@ Backward-compatible wrapper: `python migrate_db.py`
 
 ## Development
 
+### Tests
+
+The project includes a **security regression test suite** for sensitive paths (auth/IDOR, guards, and key flows).
+
+```bash
+# Install deps (including pytest)
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# Run tests
+pytest -q
+```
+
+Test entrypoints:
+- `tests/test_telegram_auth.py` — Telegram WebApp `initData` validation (HMAC, expiry)
+- `tests/test_deps_auth.py` — FastAPI dependency `AuthUserId` (401/403 behavior)
+- `tests/test_http_endpoints.py` — e2e HTTP checks via ASGI client (401/403/409/429)
+- `tests/test_user_scenarios.py` — user scenario regression (billing/status/payment idempotency)
+
 ### Add a Handler
 
 1. Create a file in `app/bot/handlers/`

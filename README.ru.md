@@ -348,6 +348,25 @@ Backward-compatible wrapper: `python migrate_db.py`
 
 ## Разработка
 
+### Тесты
+
+В проекте есть **регрессионный набор security-тестов** на чувствительные места (auth/IDOR, серверные гарды, ключевые пользовательские сценарии).
+
+```bash
+# Установить зависимости (включая pytest)
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# Запустить тесты
+pytest -q
+```
+
+Основные тесты:
+- `tests/test_telegram_auth.py` — проверка Telegram WebApp `initData` (HMAC, срок действия)
+- `tests/test_deps_auth.py` — FastAPI зависимость `AuthUserId` (401/403)
+- `tests/test_http_endpoints.py` — e2e HTTP проверки через ASGI client (401/403/409/429)
+- `tests/test_user_scenarios.py` — сценарии пользователей (billing/status/идемпотентность платежей)
+
 ### Добавить хэндлер
 
 1. Создай файл в `app/bot/handlers/`
