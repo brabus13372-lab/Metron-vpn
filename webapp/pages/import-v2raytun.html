@@ -18,42 +18,114 @@
       text-align: center;
     }
     p { margin: 0 0 12px; line-height: 1.5; }
-    a { color: #7aa2f7; }
+    a { color: #7aa2f7; word-break: break-all; }
+    .hint { font-size: 14px; color: #9aa0a6; }
+    .actions { margin-top: 16px; display: flex; flex-direction: column; gap: 10px; }
+    .btn-link {
+      display: inline-block;
+      padding: 12px 16px;
+      border-radius: 10px;
+      background: #1a1a22;
+      color: #e8e8ea;
+      text-decoration: none;
+      font-size: 15px;
+    }
   </style>
 </head>
 <body>
   <div>
-    <p id="status">Открываем v2RayTun…</p>
-    <p style="font-size:14px;color:#9aa0a6;">Если приложение не открылось, <a id="manual-link" href="#">нажмите здесь</a>.</p>
+    <p id="status">Ключ скопирован. Открываем v2RayTun…</p>
+    <p class="hint" id="hint">
+      Если появилась «ошибка» — в v2RayTun: <strong>+</strong> → <strong>Import from Clipboard</strong>
+      (ключ уже в буфере).
+    </p>
+    <div class="actions" id="actions" style="display:none;"></div>
   </div>
   <script>
     (function () {
-      const params = new URLSearchParams(window.location.search);
-      const encoded = params.get('c');
+      function copyToClipboard(text) {
+        if (navigator.clipboard && window.isSecureContext) {
+          return navigator.clipboard.writeText(text).catch(fallbackCopy);
+        }
+        return fallbackCopy();
+        function fallbackCopy() {
+          var ta = document.createElement('textarea');
+          ta.value = text;
+          ta.setAttribute('readonly', '');
+          ta.style.position = 'fixed';
+          ta.style.left = '-9999px';
+          document.body.appendChild(ta);
+          ta.select();
+          try {
+            document.execCommand('copy');
+          } catch (e) { /* ignore */ }
+          document.body.removeChild(ta);
+          return Promise.resolve();
+        }
+      }
+
+      /** Как в profile.js: не encodeURIComponent целиком. */
+      function vlessForImport(vless) {
+        return vless.replace(/#/g, '%23');
+      }
+
+      function tryNavigate(url) {
+        try {
+          window.location.replace(url);
+        } catch (e) {
+          window.location.href = url;
+        }
+      }
+
+      var params = new URLSearchParams(window.location.search);
+      var encoded = params.get('c');
       if (!encoded) {
         document.getElementById('status').textContent = 'Ключ не передан.';
         return;
       }
 
-      let vless;
+      var vless;
       try {
-        const b64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
-        const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4);
+        var b64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
+        var padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4);
         vless = decodeURIComponent(escape(atob(padded)));
       } catch (e) {
         document.getElementById('status').textContent = 'Не удалось разобрать ключ.';
         return;
       }
 
-      const deeplink = 'v2raytun://import/' + encodeURIComponent(vless);
-      const manual = document.getElementById('manual-link');
-      manual.href = deeplink;
+      var importPath = vlessForImport(vless);
+      var deeplinkImport = 'v2raytun://import/' + importPath;
+      var deeplinkVless = vless;
 
-      window.location.replace(deeplink);
+      copyToClipboard(vless);
+
+      var actions = document.getElementById('actions');
+      actions.style.display = 'flex';
+
+      function addLink(label, href) {
+        var a = document.createElement('a');
+        a.className = 'btn-link';
+        a.href = href;
+        a.textContent = label;
+        actions.appendChild(a);
+      }
+
+      addLink('Открыть в v2RayTun (импорт)', deeplinkImport);
+      addLink('Открыть как vless://', deeplinkVless);
+
+      // 1) официальный import с сырым VLESS (только # → %23)
+      tryNavigate(deeplinkImport);
+
+      // 2) запасной: системный обработчик vless://
+      setTimeout(function () {
+        tryNavigate(deeplinkVless);
+      }, 700);
+
       setTimeout(function () {
         document.getElementById('status').textContent =
-          'Если v2RayTun не открылся, нажмите ссылку ниже или скопируйте ключ вручную.';
-      }, 1500);
+          'Если v2RayTun не импортировал ключ — нажмите кнопку ниже или вставьте из буфера (+ → Import from Clipboard).';
+      }, 2000);
     })();
   </script>
 </body>

@@ -25,6 +25,18 @@ VLESS_FP = os.getenv("VLESS_FP", "chrome")
 VLESS_TYPE = os.getenv("VLESS_TYPE", "tcp")
 VLESS_PBK = os.getenv("VLESS_PBK")
 VLESS_SID = os.getenv("VLESS_SID")
+# REALITY spiderX (path) — для tcp и xhttp
+VLESS_SPX = os.getenv("VLESS_SPX", "/")
+# XHTTP (type=xhttp): path / host / mode — должны совпадать с inbound в 3x-ui
+VLESS_XHTTP_PATH = os.getenv("VLESS_XHTTP_PATH", "/")
+VLESS_XHTTP_HOST = os.getenv("VLESS_XHTTP_HOST", "")
+VLESS_XHTTP_MODE = os.getenv("VLESS_XHTTP_MODE", "auto")
+# Имя после # в ссылке. v2RayTun ломает spx/mode — по умолчанию выключено.
+VLESS_USE_FRAGMENT = os.getenv("VLESS_USE_FRAGMENT", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+)
 
 PAYMENT_AMOUNT = int(DEVICE_MONTHLY_COST * 100)  # базовая сумма (1 месяц)
 PAYMENT_AMOUNTS = [

@@ -190,6 +190,8 @@ python3 main.py
 | `SERVER_IP` | Публичный IP сервера (вставляется в VLESS-ссылки) |
 | `DATABASE_URL` | asyncpg DSN: `postgresql://user:pass@host/db` |
 | `VLESS_PBK` | REALITY public key |
+| `VLESS_TYPE` | Транспорт: `tcp` или `xhttp` |
+| `VLESS_XHTTP_PATH` / `HOST` / `MODE` | Параметры XHTTP (см. `.env.example`) |
 | `PAY_TOKEN` | YooKassa provider token (получить через @BotFather) |
 
 > ⚠️ **Никогда не коммить `.env`.** Файл исключён в `.gitignore`.

@@ -68,12 +68,19 @@
       return `${parseFloat(value ?? 0).toFixed(2)} ₽`;
     }
 
-    // Официальный формат: https://docs.v2raytun.com/deep-link
-    // v2raytun://import/{configuration}  (НЕ import?url=)
-    function buildV2RayTunDeeplink(vlessLink) {
+    // https://docs.v2raytun.com/deep-link — v2raytun://import/{configuration}
+    // configuration = сам VLESS (не encodeURIComponent целиком — иначе v2RayTun видит vless%3A… и пишет «ошибка»).
+    // В браузере кодируем только «#» (имя профиля), иначе обрезается query/fragment внешнего URI.
+    function _vlessForV2RayTunImport(vlessLink) {
       const raw = String(vlessLink || '').trim();
       if (!raw) return '';
-      return `v2raytun://import/${encodeURIComponent(raw)}`;
+      return raw.replace(/#/g, '%23');
+    }
+
+    function buildV2RayTunDeeplink(vlessLink) {
+      const safe = _vlessForV2RayTunImport(vlessLink);
+      if (!safe) return '';
+      return `v2raytun://import/${safe}`;
     }
 
     function _base64UrlEncode(str) {
@@ -89,19 +96,22 @@
       return `${window.location.origin}/pages/import-v2raytun.html?c=${payload}`;
     }
 
-    function openV2RayTunImport(vlessLink) {
+    async function openV2RayTunImport(vlessLink) {
       const raw = String(vlessLink || '').trim();
       if (!raw) {
         showToast('❌ Ключ недоступен', 'error');
         return;
       }
+      await copyText(
+        raw,
+        '✅ Ключ скопирован. Открываем v2RayTun… Если импорт не сработал: + → Import from Clipboard',
+      );
       const redirectUrl = buildV2RayTunRedirectUrl(raw);
-      const deeplink = buildV2RayTunDeeplink(raw);
       if (tg?.openLink) {
         tg.openLink(redirectUrl);
         return;
       }
-      window.location.href = deeplink;
+      window.location.href = buildV2RayTunDeeplink(raw);
     }
 
     window.openV2RayTunImport = openV2RayTunImport;

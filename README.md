@@ -190,6 +190,8 @@ All variables are documented in `.env.example`. Required ones:
 | `SERVER_IP` | Public server IP (inserted into VLESS links) |
 | `DATABASE_URL` | asyncpg DSN: `postgresql://user:pass@host/db` |
 | `VLESS_PBK` | REALITY public key |
+| `VLESS_TYPE` | Transport: `tcp` or `xhttp` |
+| `VLESS_XHTTP_PATH` / `HOST` / `MODE` | XHTTP parameters (see `.env.example`) |
 | `PAY_TOKEN` | YooKassa provider token (obtain via @BotFather) |
 
 > ⚠️ **Never commit `.env`.** The file is excluded in `.gitignore`.
