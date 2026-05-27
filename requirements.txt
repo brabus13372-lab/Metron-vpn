@@ -31,3 +31,7 @@ cachetools
 
 # Timezone data для Docker/slim-образов (stdlib zoneinfo требует tzdata)
 tzdata
+
+# Test stack
+pytest
+pytest-asyncio
