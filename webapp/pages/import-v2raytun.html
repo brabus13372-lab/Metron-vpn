@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Открытие v2RayTun…</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      background: #0b0b0d;
+      color: #e8e8ea;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      padding: 24px;
+      text-align: center;
+    }
+    p { margin: 0 0 12px; line-height: 1.5; }
+    a { color: #7aa2f7; }
+  </style>
+</head>
+<body>
+  <div>
+    <p id="status">Открываем v2RayTun…</p>
+    <p style="font-size:14px;color:#9aa0a6;">Если приложение не открылось, <a id="manual-link" href="#">нажмите здесь</a>.</p>
+  </div>
+  <script>
+    (function () {
+      const params = new URLSearchParams(window.location.search);
+      const encoded = params.get('c');
+      if (!encoded) {
+        document.getElementById('status').textContent = 'Ключ не передан.';
+        return;
+      }
+
+      let vless;
+      try {
+        const b64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
+        const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4);
+        vless = decodeURIComponent(escape(atob(padded)));
+      } catch (e) {
+        document.getElementById('status').textContent = 'Не удалось разобрать ключ.';
+        return;
+      }
+
+      const deeplink = 'v2raytun://import/' + encodeURIComponent(vless);
+      const manual = document.getElementById('manual-link');
+      manual.href = deeplink;
+
+      window.location.replace(deeplink);
+      setTimeout(function () {
+        document.getElementById('status').textContent =
+          'Если v2RayTun не открылся, нажмите ссылку ниже или скопируйте ключ вручную.';
+      }, 1500);
+    })();
+  </script>
+</body>
+</html>

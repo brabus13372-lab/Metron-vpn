@@ -68,11 +68,43 @@
       return `${parseFloat(value ?? 0).toFixed(2)} ₽`;
     }
 
+    // Официальный формат: https://docs.v2raytun.com/deep-link
+    // v2raytun://import/{configuration}  (НЕ import?url=)
     function buildV2RayTunDeeplink(vlessLink) {
       const raw = String(vlessLink || '').trim();
       if (!raw) return '';
-      return `v2raytun://import?url=${encodeURIComponent(raw)}`;
+      return `v2raytun://import/${encodeURIComponent(raw)}`;
     }
+
+    function _base64UrlEncode(str) {
+      const b64 = btoa(unescape(encodeURIComponent(str)));
+      return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+    }
+
+    /** HTTPS-страница-редирект: Telegram WebApp не всегда открывает v2raytun:// напрямую. */
+    function buildV2RayTunRedirectUrl(vlessLink) {
+      const raw = String(vlessLink || '').trim();
+      if (!raw) return '';
+      const payload = _base64UrlEncode(raw);
+      return `${window.location.origin}/pages/import-v2raytun.html?c=${payload}`;
+    }
+
+    function openV2RayTunImport(vlessLink) {
+      const raw = String(vlessLink || '').trim();
+      if (!raw) {
+        showToast('❌ Ключ недоступен', 'error');
+        return;
+      }
+      const redirectUrl = buildV2RayTunRedirectUrl(raw);
+      const deeplink = buildV2RayTunDeeplink(raw);
+      if (tg?.openLink) {
+        tg.openLink(redirectUrl);
+        return;
+      }
+      window.location.href = deeplink;
+    }
+
+    window.openV2RayTunImport = openV2RayTunImport;
 
     function buildDevicesLoadingMarkup() {
       return `
@@ -221,9 +253,8 @@
 
       if (_instrKey) {
         if (deeplinkBtn) {
-          const link = buildV2RayTunDeeplink(_instrKey);
-          deeplinkBtn.href = link || '#';
-          deeplinkBtn.style.display = link ? '' : 'none';
+          deeplinkBtn.style.display = '';
+          deeplinkBtn.onclick = () => openV2RayTunImport(_instrKey);
         }
         copyBtn.disabled = false;
         copyBtn.innerHTML = `
@@ -241,8 +272,8 @@
       }
 
       if (deeplinkBtn) {
-        deeplinkBtn.href = '#';
         deeplinkBtn.style.display = 'none';
+        deeplinkBtn.onclick = null;
       }
       copyBtn.disabled = true;
       copyBtn.innerHTML = `
@@ -336,15 +367,14 @@
         keyText.textContent = dev.vless_link;
         keySection.style.display = '';
         if (deeplinkBtn) {
-          const link = buildV2RayTunDeeplink(dev.vless_link);
-          deeplinkBtn.href = link || '#';
-          deeplinkBtn.style.display = link ? '' : 'none';
+          deeplinkBtn.style.display = '';
+          deeplinkBtn.onclick = () => openV2RayTunImport(dev.vless_link);
         }
       } else {
         keySection.style.display = 'none';
         if (deeplinkBtn) {
-          deeplinkBtn.href = '#';
           deeplinkBtn.style.display = 'none';
+          deeplinkBtn.onclick = null;
         }
       }
 
