@@ -30,6 +30,15 @@
   background: var(--color-primary-hover);
 }
 
+.btn-secondary {
+  background: var(--color-surface-offset);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+}
+.btn-secondary:hover {
+  background: var(--color-surface-2);
+}
+
 .btn-ghost {
   background: transparent;
   color: var(--color-text-muted);

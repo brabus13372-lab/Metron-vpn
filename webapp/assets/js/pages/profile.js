@@ -68,6 +68,12 @@
       return `${parseFloat(value ?? 0).toFixed(2)} ₽`;
     }
 
+    function buildV2RayTunDeeplink(vlessLink) {
+      const raw = String(vlessLink || '').trim();
+      if (!raw) return '';
+      return `v2raytun://import?url=${encodeURIComponent(raw)}`;
+    }
+
     function buildDevicesLoadingMarkup() {
       return `
         <div class="device-item" aria-hidden="true">
@@ -210,9 +216,15 @@
     function syncInstructionState() {
       const copyBtn = document.getElementById('btn-instr-copy');
       const supportBtn = document.getElementById('btn-instr-support');
+      const deeplinkBtn = document.getElementById('btn-instr-deeplink');
       if (!copyBtn || !supportBtn) return;
 
       if (_instrKey) {
+        if (deeplinkBtn) {
+          const link = buildV2RayTunDeeplink(_instrKey);
+          deeplinkBtn.href = link || '#';
+          deeplinkBtn.style.display = link ? '' : 'none';
+        }
         copyBtn.disabled = false;
         copyBtn.innerHTML = `
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -228,6 +240,10 @@
         return;
       }
 
+      if (deeplinkBtn) {
+        deeplinkBtn.href = '#';
+        deeplinkBtn.style.display = 'none';
+      }
       copyBtn.disabled = true;
       copyBtn.innerHTML = `
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -315,11 +331,21 @@
 
       const keySection = document.getElementById('ds-key-section');
       const keyText    = document.getElementById('ds-key-text');
+      const deeplinkBtn = document.getElementById('ds-deeplink-btn');
       if (dev.vless_link) {
         keyText.textContent = dev.vless_link;
         keySection.style.display = '';
+        if (deeplinkBtn) {
+          const link = buildV2RayTunDeeplink(dev.vless_link);
+          deeplinkBtn.href = link || '#';
+          deeplinkBtn.style.display = link ? '' : 'none';
+        }
       } else {
         keySection.style.display = 'none';
+        if (deeplinkBtn) {
+          deeplinkBtn.href = '#';
+          deeplinkBtn.style.display = 'none';
+        }
       }
 
       const actionsDiv = document.getElementById('ds-actions');
