@@ -81,9 +81,15 @@ async def admin_give_balance(message: types.Message, bot: Bot) -> None:
         return
 
     current_status = user_data.get("status", "NEW")
-    if current_status not in ("ACTIVE", "TRIAL"):
+    # Статусы EXPIRED/INACTIVE/NEW → ACTIVE при пополнении от админа
+    _RECOVERABLE = {"EXPIRED", "INACTIVE", "NEW"}
+    if current_status in _RECOVERABLE:
         try:
             await update_user_status(target_id, "ACTIVE")
+            logger.info(
+                "admin_give_balance: status %s → ACTIVE user_id=%s",
+                current_status, target_id,
+            )
         except Exception as e:
             logger.exception(
                 "admin_give_balance: status update failed user_id=%s",

@@ -225,7 +225,7 @@ async def success_payment(message: types.Message, bot: Bot) -> None:
         return
 
     # 3. Применяем платёж к балансу ровно один раз.
-    # Повторный webhook не должен потерять уже сохранённый, но ещё не применённый платёж.
+    # Статус EXPIRED/INACTIVE/NEW → ACTIVE атомарно внутри той же транзакции.
     try:
         apply_result = await apply_payment_topup_idempotent(
             payment_result["payment"]["id"],
@@ -237,12 +237,14 @@ async def success_payment(message: types.Message, bot: Bot) -> None:
                 user_id,
                 payment.provider_payment_charge_id,
             )
+        if apply_result.get("status_changed"):
+            logger.info("Payment restored user status to ACTIVE user=%s", user_id)
     except Exception as e:
         logger.exception("Balance apply failed user=%s", user_id)
         await _safe_alert_admin(bot, f"🚨 PAYMENT APPLY FAIL {html.escape(str(e))}")
         return
 
-    # 4. Получаем данные пользователя
+    # 4. Получаем актуальные данные пользователя (уже с обновлённым статусом)
     try:
         user_data = await get_user_data_dict(user_id)
     except Exception as e:
@@ -258,23 +260,9 @@ async def success_payment(message: types.Message, bot: Bot) -> None:
     legacy_account_uuid = user_data.get("uuid")
     current_status = user_data.get("status", "NEW")
 
-    # 5. Оплата не должна создавать account-level ключ вне `devices`:
-    # биллинг считает только `devices`, а users.vless_link/users.uuid — это
-    # исторический легаси-путь, который даёт небиллируемый доступ.
-    try:
-        if current_status not in ("ACTIVE", "TRIAL"):
-            await update_user_status(user_id, "ACTIVE")
-    except Exception as e:
-        logger.exception("User status sync failed after payment user=%s", user_id)
-        await _safe_alert_admin(
-            bot,
-            f"🚨 USER STATUS FAIL user={user_id} err={html.escape(str(e))}",
-        )
-        await message.answer(
-            "⚠️ Оплата прошла, баланс пополнен, но при обновлении статуса произошла ошибка. Мы уже разберёмся.",
-            disable_web_page_preview=True,
-        )
-        return
+    # 5. Страховка: если статус всё ещё не ACTIVE/TRIAL (например, BANNED) — не трогаем.
+    # Для TRIAL оставляем как есть — пусть доживёт триал.
+    # Для остальных recoverable-статусов apply_payment_topup_idempotent уже перевёл в ACTIVE.
 
     try:
         devices = await get_user_devices(user_id)

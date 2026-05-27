@@ -96,7 +96,17 @@ async def apply_payment_topup_idempotent(payment_id: int) -> Dict[str, Any]:
     - при повторном вызове баланс не будет пополнен дважды;
     - если старый код успел пополнить баланс, но не обновил статус платежа,
       операция подхватит уже существующую balance_transaction и пометит платёж как APPLIED.
+
+    Дополнительно: если пользователь находится в статусе EXPIRED или INACTIVE
+    (деньги кончились, доступ был отозван) — статус атомарно переводится в ACTIVE
+    в той же транзакции что и пополнение баланса. Это закрывает окно гонки между
+    шагом "начислить баланс" и шагом "обновить статус".
+
+    Возвращает поле "status_changed": True если статус был обновлён.
     """
+    # Статусы, из которых оплата должна возвращать юзера в ACTIVE
+    _RECOVERABLE_STATUSES = {"EXPIRED", "INACTIVE", "NEW"}
+
     db = get_db()
     async with db.transaction() as conn:
         payment = await conn.fetchrow(
@@ -113,7 +123,7 @@ async def apply_payment_topup_idempotent(payment_id: int) -> Dict[str, Any]:
             raise RuntimeError(f"Payment not found: id={payment_id}")
 
         user_row = await conn.fetchrow(
-            "SELECT balance FROM users WHERE user_id = $1 FOR UPDATE",
+            "SELECT balance, status FROM users WHERE user_id = $1 FOR UPDATE",
             payment["user_id"],
         )
         if not user_row:
@@ -122,12 +132,14 @@ async def apply_payment_topup_idempotent(payment_id: int) -> Dict[str, Any]:
             )
 
         current_balance = user_row["balance"]
+        current_status = user_row["status"]
         payment_key = payment["idempotency_key"] or f"payment:{payment['provider_charge_id']}"
 
         if payment["status"] == PAYMENT_STATUS_APPLIED:
             return {
                 "applied": False,
                 "already_applied": True,
+                "status_changed": False,
                 "balance": db._cents_to_rubles(current_balance),
             }
 
@@ -154,19 +166,35 @@ async def apply_payment_topup_idempotent(payment_id: int) -> Dict[str, Any]:
             return {
                 "applied": False,
                 "already_applied": True,
+                "status_changed": False,
                 "balance": db._cents_to_rubles(current_balance),
             }
 
-        updated = await conn.fetchrow(
-            """
-            UPDATE users
-            SET balance = balance + $1
-            WHERE user_id = $2
-            RETURNING balance
-            """,
-            payment["amount"],
-            payment["user_id"],
-        )
+        # Атомарно: пополняем баланс и если нужно — обновляем статус
+        status_changed = current_status in _RECOVERABLE_STATUSES
+        if status_changed:
+            updated = await conn.fetchrow(
+                """
+                UPDATE users
+                SET balance = balance + $1,
+                    status = 'ACTIVE'
+                WHERE user_id = $2
+                RETURNING balance
+                """,
+                payment["amount"],
+                payment["user_id"],
+            )
+        else:
+            updated = await conn.fetchrow(
+                """
+                UPDATE users
+                SET balance = balance + $1
+                WHERE user_id = $2
+                RETURNING balance
+                """,
+                payment["amount"],
+                payment["user_id"],
+            )
         balance_after = updated["balance"]
 
         await conn.execute(
@@ -200,6 +228,7 @@ async def apply_payment_topup_idempotent(payment_id: int) -> Dict[str, Any]:
         return {
             "applied": True,
             "already_applied": False,
+            "status_changed": status_changed,
             "balance": db._cents_to_rubles(balance_after),
         }
 
