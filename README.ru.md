@@ -23,9 +23,11 @@
 - [Стек технологий](#стек-технологий)
 - [Требования](#требования)
 - [Установка](#установка)
+- [Деплой (prod)](#деплой-prod)
 - [Переменные окружения](#переменные-окружения)
 - [API эндпоинты](#api-эндпоинты)
 - [Биллинг](#биллинг)
+- [Отказоустойчивость](#отказоустойчивость)
 - [Безопасность](#безопасность)
 - [Скрипты обслуживания](#скрипты-обслуживания)
 - [Разработка](#разработка)
@@ -56,6 +58,7 @@ Metron-vpn/
 │   ├── deps.py                      # FastAPI зависимости: AuthUserId (проверка initData)
 │   ├── services/
 │   │   ├── billing.py               # BillingEngine: ежедневное списание + TRIAL-цикл
+│   │   ├── payment_sweeper.py       # Повтор apply для платежей в статусе RECEIVED
 │   │   ├── notifications.py         # APScheduler: напоминания по подписке
 │   │   ├── reconcile.py             # Воркер сверки БД ↔ панель
 │   │   └── vpn.py                   # Бизнес-логика панели и устройств
@@ -175,6 +178,96 @@ python3 main.py
 
 ---
 
+## Деплой (prod)
+
+### systemd
+
+Сервис слушает **`:8081`** (FastAPI + статика WebApp) и параллельно поднимает aiogram polling.
+
+```ini
+# /etc/systemd/system/metron2.service
+[Service]
+WorkingDirectory=/path/to/metron_vpn_twoversion
+ExecStart=/path/to/metron_vpn_twoversion/.venv/bin/python3 main.py
+Restart=always
+```
+
+`.env` загружается через `python-dotenv` в `app/config.py` (отдельный `EnvironmentFile` в unit не обязателен).
+
+```bash
+systemctl daemon-reload
+systemctl enable --now metron2.service
+journalctl -u metron2.service -f
+```
+
+### База данных
+
+```bash
+set -a && source .env && set +a
+.venv/bin/alembic upgrade head          # применить схему
+.venv/bin/alembic downgrade base        # полный сброс (destructive!)
+.venv/bin/alembic upgrade head
+```
+
+### WebApp: nginx + HTTPS
+
+Telegram Mini App **требует HTTPS**. Uvicorn отдаёт API и статику на `127.0.0.1:8081`; снаружи — reverse proxy.
+
+**Вариант A — отдельный поддомен** (рекомендуется):
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name pnv.example.com;
+    location / {
+        proxy_pass http://127.0.0.1:8081;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+`.env` и @BotFather Menu Button:
+
+```env
+WEBAPP_URL=https://pnv.example.com/pages/profile.html
+```
+
+**Вариант B — подпуть на существующем домене** (fallback, если DNS поддомена нет):
+
+```nginx
+# edge.example.com — статика и API Metron под /pnv/
+location /pnv/ {
+    proxy_pass http://127.0.0.1:8081/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+# API без префикса /pnv/ в fetch — отдельный location обязателен
+location /api/ {
+    proxy_pass http://127.0.0.1:8081/api/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+```env
+WEBAPP_URL=https://edge.example.com/pnv/pages/profile.html
+```
+
+Фронт (`webapp/assets/js/api.js`) автоматически добавляет префикс `/pnv` к API-запросам, если WebApp открыт из `/pnv/…`.
+
+> ⚠️ **DNS:** если домен из `WEBAPP_URL` не резолвится (`ERR_NAME_NOT_RESOLVED`), WebApp не откроется — это не ошибка бота. Проверка: `dig +short your-domain @8.8.8.8`.
+
+> ⚠️ **502 на `/api/*`:** при прокси через подпуть убедись, что `/api/` тоже проксируется на `:8081`, а не на другой upstream.
+
+### VLESS / xhttp
+
+Параметры ссылки (`VLESS_TYPE`, `VLESS_XHTTP_*`, `VLESS_PBK`, `VLESS_SID`, …) **должны совпадать с inbound в 3x-ui**.  
+`INBOUND_ID` в `.env` — ID inbound в панели. Сверка: скопируй тестовую ссылку из 3x-ui и сравни query-параметры с тем, что генерит бот.
+
+---
+
 ## Переменные окружения
 
 Все переменные описаны в `.env.example`. Обязательные:
@@ -193,6 +286,9 @@ python3 main.py
 | `VLESS_TYPE` | Транспорт: `tcp` или `xhttp` |
 | `VLESS_XHTTP_PATH` / `HOST` / `MODE` | Параметры XHTTP (см. `.env.example`) |
 | `PAY_TOKEN` | YooKassa provider token (получить через @BotFather) |
+| `WEBAPP_URL` | HTTPS URL Mini App, напр. `https://pnv.example.com/pages/profile.html` |
+| `TRIAL_DAYS` | Длительность trial при `/start` (дней, default `1`) |
+| `BOT_NAME` | Username бота без `@` (для deep-link topup/support в WebApp) |
 
 > ⚠️ **Никогда не коммить `.env`.** Файл исключён в `.gitignore`.
 
@@ -259,6 +355,46 @@ WebApp взаимодействует с ботом через REST API (`app/ap
 > ⚠️ **Критически важно:** биллинг считает **только записи в таблице `devices`**.  
 > Аккаунтный ключ (`users.vless_link`) **не тарифицируется**.  
 > Не создавай клиентов в панели в обход таблицы `devices` — это дыра в биллинге.
+
+---
+
+## Отказоустойчивость
+
+Слой компенсации и graceful degradation (не two-phase commit — **reconcile** остаётся safety net).
+
+### Платежи (`app/bot/handlers/payments.py`)
+
+- `record_payment_idempotent` → `apply_payment_topup_idempotent` с **одним retry**
+- После успешного apply юзер **всегда** получает подтверждение; activation/devices — best-effort
+- Если apply упал после record — юзеру «оплата получена, баланс обновится», админу alert с `payment_id`
+- Deep-link `/start topup|pay` из WebApp → экран пополнения
+- **RECEIVED sweeper** — каждые 15 мин (`BillingEngine`) повторяет `apply_payment_topup_idempotent`
+- **pre_checkout** — payload `user_id` должен совпадать с плательщиком
+
+### Panel ↔ DB (add device)
+
+- Panel OK → DB fail → `rollback_orphan_panel_client()` в bot и API `create_device`
+- При неудачном rollback — подхватывает `run_reconcile_loop`
+
+### API / Bot errors
+
+- WebApp API: panel/internal errors → `_INTERNAL_ACTION_ERROR` (детали только в log + admin notify)
+- `rotate_device_key` → `safe_rotate_device_key` (panel rollback при DB fail)
+- Bot: global `@dp.errors()` handler; support FSM сбрасывается **после** успешного forward
+- `/start` dedup: короткий ответ вместо молчаливого drop
+
+### Тесты
+
+```bash
+pytest -q   # 74 regression tests (auth, payments, rollback, resilience, webapp API)
+```
+
+Основные группы:
+- `tests/test_telegram_auth.py`, `test_deps_auth.py`, `test_http_endpoints.py` — auth / IDOR / HTTP guards
+- `tests/test_bot_*.py`, `test_post_deploy_hardening.py` — бот, платежи, pre_checkout, sweeper
+- `tests/test_api_internal_errors.py`, `test_add_device_rollback.py` — panel rollback, sanitized API errors
+- `tests/test_vless_link.py` — сборка VLESS (tcp / xhttp + REALITY)
+- `tests/test_user_scenarios.py` — billing, payments idempotency
 
 ---
 
@@ -368,6 +504,7 @@ pytest -q
 - `tests/test_deps_auth.py` — FastAPI зависимость `AuthUserId` (401/403)
 - `tests/test_http_endpoints.py` — e2e HTTP проверки через ASGI client (401/403/409/429)
 - `tests/test_user_scenarios.py` — сценарии пользователей (billing/status/идемпотентность платежей)
+- `tests/test_bot_resilience.py`, `test_post_deploy_hardening.py` — отказоустойчивость и post-deploy hardening
 
 ### Добавить хэндлер
 

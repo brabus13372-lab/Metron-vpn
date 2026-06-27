@@ -23,9 +23,11 @@
 - [Tech Stack](#tech-stack)
 - [Requirements](#requirements)
 - [Installation](#installation)
+- [Production deployment](#production-deployment)
 - [Environment Variables](#environment-variables)
 - [API Endpoints](#api-endpoints)
 - [Billing](#billing)
+- [Resilience](#resilience)
 - [Security](#security)
 - [Maintenance Scripts](#maintenance-scripts)
 - [Development](#development)
@@ -56,6 +58,7 @@ Metron-vpn/
 │   ├── deps.py                      # FastAPI deps: AuthUserId (initData verification)
 │   ├── services/
 │   │   ├── billing.py               # BillingEngine: daily charge + TRIAL cycle
+│   │   ├── payment_sweeper.py       # Retry apply for RECEIVED payments
 │   │   ├── notifications.py         # APScheduler subscription reminders
 │   │   ├── reconcile.py             # DB ↔ panel drift repair worker
 │   │   └── vpn.py                   # Panel/device business logic
@@ -175,6 +178,94 @@ python3 main.py
 
 ---
 
+## Production deployment
+
+### systemd
+
+The service listens on **`:8081`** (FastAPI + WebApp static) and runs aiogram long-polling in the same process.
+
+```ini
+# /etc/systemd/system/metron2.service
+[Service]
+WorkingDirectory=/path/to/metron_vpn_twoversion
+ExecStart=/path/to/metron_vpn_twoversion/.venv/bin/python3 main.py
+Restart=always
+```
+
+`.env` is loaded via `python-dotenv` in `app/config.py` (a separate `EnvironmentFile` in the unit is optional).
+
+```bash
+systemctl daemon-reload
+systemctl enable --now metron2.service
+journalctl -u metron2.service -f
+```
+
+### Database
+
+```bash
+set -a && source .env && set +a
+.venv/bin/alembic upgrade head          # apply schema
+.venv/bin/alembic downgrade base        # full reset (destructive!)
+.venv/bin/alembic upgrade head
+```
+
+### WebApp: nginx + HTTPS
+
+Telegram Mini Apps **require HTTPS**. Uvicorn serves API + static on `127.0.0.1:8081`; expose it via reverse proxy.
+
+**Option A — dedicated subdomain** (recommended):
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name pnv.example.com;
+    location / {
+        proxy_pass http://127.0.0.1:8081;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+`.env` and @BotFather Menu Button:
+
+```env
+WEBAPP_URL=https://pnv.example.com/pages/profile.html
+```
+
+**Option B — path on an existing domain** (fallback when subdomain DNS is missing):
+
+```nginx
+location /pnv/ {
+    proxy_pass http://127.0.0.1:8081/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+location /api/ {
+    proxy_pass http://127.0.0.1:8081/api/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+```env
+WEBAPP_URL=https://edge.example.com/pnv/pages/profile.html
+```
+
+The frontend (`webapp/assets/js/api.js`) auto-prefixes `/pnv` for API calls when the WebApp is opened under `/pnv/…`.
+
+> ⚠️ **DNS:** if the domain in `WEBAPP_URL` does not resolve (`ERR_NAME_NOT_RESOLVED`), the WebApp will not open — this is not a bot bug. Check: `dig +short your-domain @8.8.8.8`.
+
+> ⚠️ **502 on `/api/*`:** when proxying under a path prefix, ensure `/api/` is also proxied to `:8081`, not to another upstream.
+
+### VLESS / xhttp
+
+Link parameters (`VLESS_TYPE`, `VLESS_XHTTP_*`, `VLESS_PBK`, `VLESS_SID`, …) **must match the 3x-ui inbound**.  
+`INBOUND_ID` in `.env` is the inbound ID in the panel. Verify by comparing a test link from 3x-ui with the bot-generated link query params.
+
+---
+
 ## Environment Variables
 
 All variables are documented in `.env.example`. Required ones:
@@ -193,6 +284,9 @@ All variables are documented in `.env.example`. Required ones:
 | `VLESS_TYPE` | Transport: `tcp` or `xhttp` |
 | `VLESS_XHTTP_PATH` / `HOST` / `MODE` | XHTTP parameters (see `.env.example`) |
 | `PAY_TOKEN` | YooKassa provider token (obtain via @BotFather) |
+| `WEBAPP_URL` | HTTPS Mini App URL, e.g. `https://pnv.example.com/pages/profile.html` |
+| `TRIAL_DAYS` | Trial length on `/start` (days, default `1`) |
+| `BOT_NAME` | Bot username without `@` (WebApp topup/support deep links) |
 
 > ⚠️ **Never commit `.env`.** The file is excluded in `.gitignore`.
 
@@ -262,7 +356,39 @@ The WebApp communicates with the bot via REST API (`app/api.py`).
 
 ---
 
-## Security
+## Resilience
+
+Compensation layer and graceful degradation (reconcile remains the safety net).
+
+### Payments (`app/bot/handlers/payments.py`)
+
+- `record_payment_idempotent` → `apply_payment_topup_idempotent` with **one retry**
+- After successful apply the user **always** gets confirmation; activation/devices are best-effort
+- If apply fails after record — user sees “payment received, balance will update”; admin gets alert with `payment_id`
+- Deep-link `/start topup|pay` from WebApp → top-up screen
+- **RECEIVED sweeper** — every 15 min (`BillingEngine`) retries `apply_payment_topup_idempotent`
+- **pre_checkout** — payload `user_id` must match the payer
+
+### Panel ↔ DB (add device)
+
+- Panel OK → DB fail → `rollback_orphan_panel_client()` in bot and API `create_device`
+- Failed rollback is picked up by `run_reconcile_loop`
+
+### API / Bot errors
+
+- WebApp API: panel/internal errors → `_INTERNAL_ACTION_ERROR` (details in logs + admin notify only)
+- `rotate_device_key` → `safe_rotate_device_key` (panel rollback on DB fail)
+- Bot: global `@dp.errors()` handler; support FSM clears **after** successful forward
+- `/start` dedup: short reply instead of silent drop
+- Trial on `/start`: `expire_at = now + TRIAL_DAYS`
+
+### Tests
+
+```bash
+pytest -q   # 74 regression tests
+```
+
+---
 
 ### Log Masking
 
@@ -368,6 +494,8 @@ Test entrypoints:
 - `tests/test_deps_auth.py` — FastAPI dependency `AuthUserId` (401/403 behavior)
 - `tests/test_http_endpoints.py` — e2e HTTP checks via ASGI client (401/403/409/429)
 - `tests/test_user_scenarios.py` — user scenario regression (billing/status/payment idempotency)
+- `tests/test_bot_resilience.py`, `test_post_deploy_hardening.py` — resilience and post-deploy hardening
+- `tests/test_vless_link.py` — VLESS link builder (tcp / xhttp + REALITY)
 
 ### Add a Handler
 

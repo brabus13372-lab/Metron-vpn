@@ -2,7 +2,15 @@
 // METRON WEBAPP — API layer
 // ============================================
 
-const BASE_URL = '';
+/** Префикс при размещении под /pnv/ на edge (fallback без DNS). */
+export function detectWebappBase() {
+  const path = window.location.pathname || '';
+  if (path === '/pnv' || path.startsWith('/pnv/')) return '/pnv';
+  return '';
+}
+
+export const WEBAPP_BASE = detectWebappBase();
+const BASE_URL = WEBAPP_BASE;
 
 /** Сырой initData из Telegram WebApp (для HMAC-проверки на бэкенде). */
 export function getTelegramInitData() {

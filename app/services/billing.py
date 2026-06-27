@@ -59,7 +59,19 @@ class BillingEngine:
             coalesce=True,
             misfire_grace_time=3600,
         )
-        logger.info("Billing jobs scheduled: billing=00:05 MSK, trial=every 1h")
+        self.scheduler.add_job(
+            self._pending_payments_cycle,
+            trigger=IntervalTrigger(minutes=15),
+            id="pending_payments",
+            name="Apply RECEIVED payments (every 15m)",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=900,
+        )
+        logger.info(
+            "Billing jobs scheduled: billing=00:05 MSK, trial=every 1h, pending_payments=every 15m"
+        )
 
     # -----------------------------------------------------------------------
     # Helpers
@@ -186,6 +198,20 @@ class BillingEngine:
         except Exception as exc:
             logger.error("trial_expiry.cycle.critical_error err=%s", exc, exc_info=True)
 
+    async def _pending_payments_cycle(self) -> None:
+        from app.services.payment_sweeper import sweep_received_payments
+
+        logger.info("payment_sweeper.cycle.start")
+        try:
+            applied, failed = await sweep_received_payments(self._bot)
+            logger.info(
+                "payment_sweeper.cycle.done applied=%s failed=%s",
+                applied,
+                failed,
+            )
+        except Exception as exc:
+            logger.error("payment_sweeper.cycle.critical_error err=%s", exc, exc_info=True)
+
     async def _process_trial_expiry(self, user_id: int):
         try:
             logger.info("trial_expiry.start user_id=%s", user_id)
@@ -221,11 +247,21 @@ class BillingEngine:
 
         # Меняем статус юзера: EXPIRED — деньги кончились, доступ отозван.
         # payments.py вернёт статус в ACTIVE при следующем пополнении.
-        await update_user_status(user_id, "EXPIRED")
+        status_updated = False
+        try:
+            await update_user_status(user_id, "EXPIRED")
+            status_updated = True
+        except Exception as exc:
+            logger.error(
+                "billing.deactivate_devices.status_update_failed user_id=%s err=%s",
+                user_id, exc,
+                exc_info=True,
+            )
 
         logger.info(
-            "billing.deactivate_devices.done user_id=%s ok=%s fail=%s status=EXPIRED",
+            "billing.deactivate_devices.done user_id=%s ok=%s fail=%s status=%s",
             user_id, success_count, fail_count,
+            "EXPIRED" if status_updated else "UPDATE_FAILED",
         )
 
         user_text = (

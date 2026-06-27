@@ -1,4 +1,4 @@
-    import { buildAuthHeaders } from '../api.js';
+    import { buildAuthHeaders, WEBAPP_BASE } from '../api.js';
 
     const tg = window.Telegram?.WebApp;
     if (tg) { tg.expand(); tg.ready(); }
@@ -181,7 +181,7 @@
           form.append('files', file, file.name);
         }
 
-        const res = await fetch(`/api/user/${USER_ID}/support`, {
+        const res = await fetch(`${WEBAPP_BASE}/api/user/${USER_ID}/support`, {
           method: 'POST',
           headers: buildAuthHeaders(),
           body: form,
@@ -223,7 +223,7 @@
       setTicketsLoading(true, { soft: soft && _ticketsLoaded });
 
       try {
-        const res = await fetch(`/api/user/${USER_ID}/support`, {
+        const res = await fetch(`${WEBAPP_BASE}/api/user/${USER_ID}/support`, {
           headers: buildAuthHeaders(),
         });
         if (!res.ok) throw new Error(await parseApiError(res));
@@ -357,3 +357,6 @@
 
     window.sendTicket = sendTicket;
     window.refreshTickets = refreshTickets;
+    // support.html uses inline handlers (oninput/onchange). Expose them on window.
+    window.onTextInput = onTextInput;
+    window.onFilesSelected = onFilesSelected;

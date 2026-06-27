@@ -251,3 +251,20 @@ async def get_payment_by_charge_ids(
             telegram_charge_id, provider_charge_id,
         )
         return dict(row) if row else None
+
+
+async def list_received_payment_ids(limit: int = 50) -> list[int]:
+    """Payment ids stuck in RECEIVED (recorded but not applied to balance)."""
+    async with get_db().connection() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id
+            FROM payments
+            WHERE status = $1
+            ORDER BY created_at ASC
+            LIMIT $2
+            """,
+            PAYMENT_STATUS_RECEIVED,
+            limit,
+        )
+        return [row["id"] for row in rows]

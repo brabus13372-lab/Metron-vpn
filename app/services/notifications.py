@@ -310,6 +310,13 @@ async def _check_low_balance(bot: Bot) -> None:
 
 
 async def check_reactivation_notifications(bot: Bot) -> None:
+    try:
+        await _check_reactivation_notifications(bot)
+    except Exception as e:
+        logger.error("check_reactivation_notifications_failed err=%s", e, exc_info=True)
+
+
+async def _check_reactivation_notifications(bot: Bot) -> None:
     """
     Отправляет уведомление юзерам у которых:
       - статус ACTIVE

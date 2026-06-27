@@ -5,6 +5,7 @@ from typing import Dict
 from cachetools import TTLCache
 
 from aiogram import Bot, types, F
+from aiogram.filters import Command
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -41,6 +42,12 @@ async def support_cmd(message: types.Message, state: FSMContext) -> None:
     )
 
 
+@dp.message(Command("support"))
+async def support_cmd_slash(message: types.Message, state: FSMContext) -> None:
+    # Тот же вход, но без reply-кнопок: /support
+    await support_cmd(message, state)
+
+
 @dp.message(SupportState.waiting_for_question, F.text == "/cancel")
 @dp.message(SupportState.waiting_for_admin_reply, F.text == "/cancel")
 async def cancel_support(message: types.Message, state: FSMContext) -> None:
@@ -67,8 +74,6 @@ async def forward_to_admin(message: types.Message, state: FSMContext, bot: Bot) 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✍️ Ответить", callback_data=f"reply_{user_id}")]
     ])
-
-    await state.clear()
 
     try:
         if message.text:
@@ -114,12 +119,15 @@ async def forward_to_admin(message: types.Message, state: FSMContext, bot: Bot) 
 
         _last_support_message[user_id] = True
 
+        await state.clear()
         await message.answer("✅ Ваше обращение отправлено. Ожидайте ответа.")
         logger.info("support.forwarded user_id=%s", user_id)
 
     except Exception:
         logger.exception("support.forward_failed user_id=%s", user_id)
-        await message.answer("❌ Произошла ошибка при отправке. Попробуйте позже.")
+        await message.answer(
+            "❌ Произошла ошибка при отправке. Попробуйте ещё раз или напишите /cancel."
+        )
 
 
 def _cut_text(text: str, limit: int) -> str:

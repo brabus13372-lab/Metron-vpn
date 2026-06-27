@@ -16,11 +16,38 @@ from app.db import (
     get_user_devices,
     record_payment_idempotent,
     set_reactivation_notification_pending,
-    update_user_status,
 )
 from app.services.vpn import activate_all_user_devices
 
 logger = logging.getLogger(__name__)
+
+
+def _payment_options_markup() -> types.InlineKeyboardMarkup:
+    try:
+        amounts = PAYMENT_AMOUNTS
+    except NameError:
+        amounts = [10000, 20000, 50000, 100000]
+
+    builder = InlineKeyboardBuilder()
+    for amount_cents in amounts:
+        rub = amount_cents // 100
+        builder.row(
+            types.InlineKeyboardButton(
+                text=f"💳 Пополнить на {rub} руб.",
+                callback_data=f"pay_amount_{amount_cents}",
+            )
+        )
+    builder.row(types.InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_profile"))
+    return builder.as_markup()
+
+
+async def send_payment_options_message(message: types.Message) -> None:
+    """Deep-link entry: /start topup|pay from WebApp."""
+    await message.answer(
+        "<b>💳 Пополнение баланса</b>\n\nВыберите сумму:",
+        parse_mode="HTML",
+        reply_markup=_payment_options_markup(),
+    )
 
 
 async def _safe_alert_admin(bot: Bot, text: str) -> None:
@@ -66,6 +93,95 @@ def _validate_payment(payment: types.SuccessfulPayment, user_id: int) -> bool:
     return True
 
 
+def _build_payment_success_text(
+    *,
+    new_balance: float,
+    has_devices: bool,
+    suspended_count: int,
+    activation_success: int,
+    activation_failed: int,
+    post_apply_issues: list[str],
+) -> str:
+    """User-facing confirmation after balance apply. Post-apply steps are best-effort."""
+    header = (
+        "🎉 <b>Оплата прошла успешно!</b>\n"
+        f"<b>💰 Баланс:</b> {new_balance:.2f} ₽\n"
+    )
+
+    if post_apply_issues:
+        return (
+            f"{header}"
+            "Баланс обновлён. Если доступ не восстановился сразу — "
+            "откройте личный кабинет или напишите в поддержку."
+        )
+
+    if not has_devices:
+        return (
+            f"{header}"
+            "Чтобы получить VPN-доступ, откройте личный кабинет и добавьте первое устройство."
+        )
+
+    if suspended_count > 0 and activation_failed == 0 and activation_success > 0:
+        return (
+            f"{header}"
+            "Доступ восстановлен, устройства снова активны. "
+            "Откройте личный кабинет для управления доступом:"
+        )
+
+    if suspended_count > 0 and activation_failed > 0:
+        return (
+            f"{header}"
+            "Баланс пополнен, но часть устройств ещё восстанавливается. "
+            "Проверьте профиль чуть позже или напишите в поддержку."
+        )
+
+    return (
+        f"{header}"
+        "Баланс обновлён. Откройте личный кабинет для управления доступом:"
+    )
+
+
+def _build_payment_apply_pending_text(amount_cents: int) -> str:
+    """User message when payment is recorded but balance apply failed after retry."""
+    rub = amount_cents / 100
+    return (
+        "✅ <b>Оплата получена.</b>\n"
+        f"Сумма: <b>{rub:.2f} ₽</b>\n\n"
+        "Баланс обновится в ближайшее время. Если через несколько минут "
+        "средства не появятся в личном кабинете — напишите в поддержку."
+    )
+
+
+_APPLY_RETRY_ATTEMPTS = 2
+
+
+async def _apply_payment_with_retry(payment_id: int) -> dict:
+    """Apply top-up idempotently; one safe retry on transient failure."""
+    last_exc: Exception | None = None
+    for attempt in range(1, _APPLY_RETRY_ATTEMPTS + 1):
+        try:
+            result = await apply_payment_topup_idempotent(payment_id)
+            if attempt > 1:
+                logger.info(
+                    "payment.apply_retry_ok payment_id=%s attempt=%s",
+                    payment_id,
+                    attempt,
+                )
+            return result
+        except Exception as exc:
+            last_exc = exc
+            logger.exception(
+                "payment.apply_failed payment_id=%s attempt=%s/%s",
+                payment_id,
+                attempt,
+                _APPLY_RETRY_ATTEMPTS,
+            )
+            if attempt >= _APPLY_RETRY_ATTEMPTS:
+                break
+    assert last_exc is not None
+    raise last_exc
+
+
 async def _execute_activation(user_id: int, bot: Bot) -> tuple[int, int, list]:
     """
     Активирует устройства в панели.
@@ -96,27 +212,10 @@ async def show_payment_options(call: types.CallbackQuery) -> None:
     """Показываем пресеты суммы для пополнения."""
     await call.answer()
 
-    try:
-        from app.config import PAYMENT_AMOUNTS
-        amounts = PAYMENT_AMOUNTS
-    except ImportError:
-        amounts = [10000, 20000, 50000, 100000]
-
-    builder = InlineKeyboardBuilder()
-    for amount_cents in amounts:
-        rub = amount_cents // 100
-        builder.row(
-            types.InlineKeyboardButton(
-                text=f"💳 Пополнить на {rub} руб.",
-                callback_data=f"pay_amount_{amount_cents}",
-            )
-        )
-    builder.row(types.InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_profile"))
-
     await call.message.edit_text(
         "<b>💳 Пополнение баланса</b>\n\nВыберите сумму:",
         parse_mode="HTML",
-        reply_markup=builder.as_markup(),
+        reply_markup=_payment_options_markup(),
     )
 
 
@@ -142,25 +241,42 @@ async def send_invoice(call: types.CallbackQuery, bot: Bot) -> None:
     payload = f"vpn_pay_{call.from_user.id}_{int(datetime.now().timestamp())}_{amount_cents}"
     rub = amount_cents // 100
 
-    await bot.send_invoice(
-        chat_id=call.from_user.id,
-        title="MetronVPN — пополнение баланса",
-        description=f"Пополнение баланса на {rub} руб.",
-        payload=payload,
-        provider_token=PAY_TOKEN,
-        currency="RUB",
-        prices=[LabeledPrice(label=f"Баланс +{rub} руб.", amount=amount_cents)],
-    )
+    try:
+        await bot.send_invoice(
+            chat_id=call.from_user.id,
+            title="MetronVPN — пополнение баланса",
+            description=f"Пополнение баланса на {rub} руб.",
+            payload=payload,
+            provider_token=PAY_TOKEN,
+            currency="RUB",
+            prices=[LabeledPrice(label=f"Баланс +{rub} руб.", amount=amount_cents)],
+        )
+    except Exception:
+        logger.exception("send_invoice.failed user_id=%s amount_cents=%s", call.from_user.id, amount_cents)
+        await call.message.answer("❌ Не удалось выставить счёт. Попробуйте позже.")
 
 
 @dp.pre_checkout_query(F.invoice_payload.startswith("vpn_pay_"))
 async def pre_checkout(q: types.PreCheckoutQuery, bot: Bot) -> None:
     try:
         parts = q.invoice_payload.split("_", 4)
+        payload_user_id = int(parts[2])
         expected_amount = int(parts[4])
     except (IndexError, ValueError):
         await bot.answer_pre_checkout_query(
             q.id, ok=False, error_message="Неверный формат платежа"
+        )
+        return
+
+    if payload_user_id != q.from_user.id:
+        logger.warning(
+            "pre_checkout.user_mismatch payer=%s payload_user=%s payload=%s",
+            q.from_user.id,
+            payload_user_id,
+            q.invoice_payload,
+        )
+        await bot.answer_pre_checkout_query(
+            q.id, ok=False, error_message="Неверный получатель платежа"
         )
         return
 
@@ -224,12 +340,10 @@ async def success_payment(message: types.Message, bot: Bot) -> None:
         await _safe_alert_admin(bot, f"🚨 PAYMENT SAVE FAIL {html.escape(str(e))}")
         return
 
-    # 3. Применяем платёж к балансу ровно один раз.
-    # Статус EXPIRED/INACTIVE/NEW → ACTIVE атомарно внутри той же транзакции.
+    # 3. Применяем платёж к балансу ровно один раз (с одним безопасным retry).
+    payment_id = payment_result["payment"]["id"]
     try:
-        apply_result = await apply_payment_topup_idempotent(
-            payment_result["payment"]["id"],
-        )
+        apply_result = await _apply_payment_with_retry(payment_id)
         new_balance = apply_result["balance"]
         if apply_result["already_applied"]:
             logger.info(
@@ -240,96 +354,123 @@ async def success_payment(message: types.Message, bot: Bot) -> None:
         if apply_result.get("status_changed"):
             logger.info("Payment restored user status to ACTIVE user=%s", user_id)
     except Exception as e:
-        logger.exception("Balance apply failed user=%s", user_id)
-        await _safe_alert_admin(bot, f"🚨 PAYMENT APPLY FAIL {html.escape(str(e))}")
+        logger.exception(
+            "Balance apply failed after retry user=%s payment_id=%s",
+            user_id,
+            payment_id,
+        )
+        await _safe_alert_admin(
+            bot,
+            "🚨 PAYMENT APPLY FAIL "
+            f"user={user_id} payment_id={payment_id} "
+            f"provider={html.escape(payment.provider_payment_charge_id)} "
+            f"err={html.escape(str(e))}",
+        )
+        try:
+            await message.answer(
+                _build_payment_apply_pending_text(amount_cents),
+                parse_mode="HTML",
+                reply_markup=webapp_button(WEBAPP_URL, user_id),
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to send payment pending confirmation user=%s payment_id=%s",
+                user_id,
+                payment_id,
+            )
         return
 
-    # 4. Получаем актуальные данные пользователя (уже с обновлённым статусом)
+    post_apply_issues: list[str] = []
+    user_data: dict | None = None
+    devices: list = []
+    legacy_account_uuid = None
+    suspended_devices: list = []
+    activation_success = 0
+    activation_failed = 0
+
+    # Post-apply steps are best-effort — balance is already credited.
     try:
         user_data = await get_user_data_dict(user_id)
     except Exception as e:
         logger.exception("Failed to fetch user data user=%s", user_id)
         await _safe_alert_admin(bot, f"🚨 USER DATA FAIL {html.escape(str(e))}")
-        return
+        post_apply_issues.append("user_data")
 
-    if not user_data:
+    if user_data is None and "user_data" not in post_apply_issues:
         logger.error("User data missing after successful balance update user=%s", user_id)
         await _safe_alert_admin(bot, f"🚨 USER DATA MISSING {user_id}")
-        return
+        post_apply_issues.append("user_data")
+    elif user_data:
+        legacy_account_uuid = user_data.get("uuid")
 
-    legacy_account_uuid = user_data.get("uuid")
-    current_status = user_data.get("status", "NEW")
-
-    # 5. Страховка: если статус всё ещё не ACTIVE/TRIAL (например, BANNED) — не трогаем.
-    # Для TRIAL оставляем как есть — пусть доживёт триал.
-    # Для остальных recoverable-статусов apply_payment_topup_idempotent уже перевёл в ACTIVE.
-
-    try:
-        devices = await get_user_devices(user_id)
-    except Exception as e:
-        logger.exception("Failed to fetch devices after payment user=%s", user_id)
-        await _safe_alert_admin(bot, f"🚨 DEVICE LIST FAIL user={user_id} err={html.escape(str(e))}")
-        return
-
-    # 6. Активируем устройства в панели
-    suspended_devices = [
-        d for d in devices
-        if not d["is_active"] and d.get("disabled_reason") == "insufficient_funds"
-    ]
-    activation_success = 0
-    activation_failed = 0
-    if devices:
-        activation_success, activation_failed, _ = await _execute_activation(user_id, bot)
-        if suspended_devices and activation_failed == 0 and activation_success > 0:
-            await set_reactivation_notification_pending(user_id, False)
-    elif legacy_account_uuid:
-        logger.warning(
-            "Payment completed for legacy account-level access user=%s uuid=%s without billable devices",
-            user_id,
-            legacy_account_uuid,
-        )
-        await _safe_alert_admin(
-            bot,
-            f"⚠️ Payment OK but user={user_id} still has legacy account key without billable devices",
-        )
-
-    # 7. Отправляем подтверждение — только WebApp кнопка
-    if devices:
-        if suspended_devices and activation_failed == 0 and activation_success > 0:
-            user_text = (
-                "🎉 <b>Оплата прошла успешно!</b>\n"
-                f"<b>💰 Баланс:</b> {new_balance:.2f} ₽\n"
-                "Доступ восстановлен, устройства снова активны. Откройте личный кабинет для управления доступом:"
+        try:
+            devices = await get_user_devices(user_id)
+        except Exception as e:
+            logger.exception("Failed to fetch devices after payment user=%s", user_id)
+            await _safe_alert_admin(
+                bot,
+                f"🚨 DEVICE LIST FAIL user={user_id} err={html.escape(str(e))}",
             )
-        elif suspended_devices and activation_failed > 0:
-            user_text = (
-                "🎉 <b>Оплата прошла успешно!</b>\n"
-                f"<b>💰 Баланс:</b> {new_balance:.2f} ₽\n"
-                "Баланс пополнен, но часть устройств ещё восстанавливается. Проверьте профиль чуть позже или напишите в поддержку."
-            )
-        else:
-            user_text = (
-                "🎉 <b>Оплата прошла успешно!</b>\n"
-                f"<b>💰 Баланс:</b> {new_balance:.2f} ₽\n"
-                "Баланс обновлён. Откройте личный кабинет для управления доступом:"
-            )
-    else:
-        user_text = (
-            "🎉 <b>Оплата прошла успешно!</b>\n"
-            f"<b>💰 Баланс:</b> {new_balance:.2f} ₽\n"
-            "Чтобы получить VPN-доступ, откройте личный кабинет и добавьте первое устройство."
-        )
+            post_apply_issues.append("devices")
 
-    await message.answer(
-        user_text,
-        parse_mode="HTML",
-        reply_markup=webapp_button(WEBAPP_URL, user_id),
-        disable_web_page_preview=True,
+        if devices:
+            suspended_devices = [
+                d for d in devices
+                if not d["is_active"] and d.get("disabled_reason") == "insufficient_funds"
+            ]
+            activation_success, activation_failed, _ = await _execute_activation(user_id, bot)
+            if suspended_devices and activation_failed == 0 and activation_success > 0:
+                try:
+                    await set_reactivation_notification_pending(user_id, False)
+                except Exception:
+                    logger.exception(
+                        "Failed to clear reactivation flag after payment user=%s",
+                        user_id,
+                    )
+        elif legacy_account_uuid:
+            logger.warning(
+                "Payment completed for legacy account-level access user=%s uuid=%s without billable devices",
+                user_id,
+                legacy_account_uuid,
+            )
+            await _safe_alert_admin(
+                bot,
+                f"⚠️ Payment OK but user={user_id} still has legacy account key without billable devices",
+            )
+
+    user_text = _build_payment_success_text(
+        new_balance=new_balance,
+        has_devices=bool(devices),
+        suspended_count=len(suspended_devices),
+        activation_success=activation_success,
+        activation_failed=activation_failed,
+        post_apply_issues=post_apply_issues,
     )
 
+    try:
+        await message.answer(
+            user_text,
+            parse_mode="HTML",
+            reply_markup=webapp_button(WEBAPP_URL, user_id),
+            disable_web_page_preview=True,
+        )
+    except Exception:
+        logger.exception("Failed to send payment confirmation user=%s", user_id)
+        await _safe_alert_admin(
+            bot,
+            f"🚨 PAYMENT CONFIRM SEND FAIL user={user_id} balance={new_balance:.2f}",
+        )
+        return
+
     logger.info(
-        "PAYMENT SUCCESS user=%s amount_cents=%s balance=%s devices=%s legacy_account_key=%s",
-        user_id, amount_cents, new_balance, len(devices), bool(legacy_account_uuid),
+        "PAYMENT SUCCESS user=%s amount_cents=%s balance=%s devices=%s legacy_account_key=%s post_apply_issues=%s",
+        user_id,
+        amount_cents,
+        new_balance,
+        len(devices),
+        bool(legacy_account_uuid),
+        post_apply_issues or None,
     )
 
     await _safe_alert_admin(

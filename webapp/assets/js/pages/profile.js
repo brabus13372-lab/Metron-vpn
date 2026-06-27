@@ -3,6 +3,7 @@
       rotateDeviceKey as apiRotateDeviceKey,
       fetchBotConfig,
       buildAuthHeaders,
+      WEBAPP_BASE,
     } from '../api.js';
 
     const tg = window.Telegram?.WebApp;
@@ -93,7 +94,7 @@
       const raw = String(vlessLink || '').trim();
       if (!raw) return '';
       const payload = _base64UrlEncode(raw);
-      return `${window.location.origin}/pages/import-v2raytun.html?c=${payload}`;
+      return `${window.location.origin}${WEBAPP_BASE}/pages/import-v2raytun.html?c=${payload}`;
     }
 
     async function openV2RayTunImport(vlessLink) {
@@ -492,7 +493,7 @@
       btn.disabled = true;
       btn.innerHTML = `<div class="spinner"></div> Отключаем...`;
       try {
-        const res = await fetch(`/api/user/${USER_ID}/devices/${id}`, {
+        const res = await fetch(`${WEBAPP_BASE}/api/user/${USER_ID}/devices/${id}`, {
           method: 'DELETE',
           headers: buildAuthHeaders(),
         });
@@ -531,7 +532,7 @@
         btn.disabled = true;
         btn.innerHTML = `<div class="spinner"></div> Удаляем...`;
         try {
-            const res = await fetch(`/api/user/${USER_ID}/devices/${id}/hard`, {
+            const res = await fetch(`${WEBAPP_BASE}/api/user/${USER_ID}/devices/${id}/hard`, {
               method: 'DELETE',
               headers: buildAuthHeaders(),
             });
@@ -565,7 +566,7 @@
       btn.disabled = true;
       btn.innerHTML = `<div class="spinner"></div> Добавляем...`;
       try {
-        const res = await fetch(`/api/user/${USER_ID}/devices`, {
+        const res = await fetch(`${WEBAPP_BASE}/api/user/${USER_ID}/devices`, {
           method: 'POST',
           headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({ device_name: name }),

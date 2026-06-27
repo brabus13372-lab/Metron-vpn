@@ -247,6 +247,38 @@ async def remove_device_from_panel(client_uuid: str, user_id: int):
     return False, res.get("msg")
 
 
+async def rollback_orphan_panel_client(
+    user_id: int,
+    client_uuid: str | None,
+    *,
+    context: str,
+) -> tuple[bool, str | None]:
+    """
+    Compensating action: panel client was created but DB insert failed.
+    Best-effort removal; reconcile remains the safety net if rollback fails.
+    """
+    if not client_uuid:
+        return True, None
+
+    ok, err = await remove_device_from_panel(client_uuid, user_id)
+    if ok:
+        logger.info(
+            "%s.panel_rollback_ok user_id=%s uuid=%s",
+            context,
+            user_id,
+            client_uuid,
+        )
+    else:
+        logger.error(
+            "%s.panel_rollback_fail user_id=%s uuid=%s err=%s",
+            context,
+            user_id,
+            client_uuid,
+            err,
+        )
+    return ok, err
+
+
 # ---------------------------------------------------------------------------
 # Bulk activate / deactivate
 # ---------------------------------------------------------------------------

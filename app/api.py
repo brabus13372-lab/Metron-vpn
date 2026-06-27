@@ -47,9 +47,10 @@ from app.db import (
 from app.services.vpn import (
     rotate_user_key,
     add_device_to_panel,
-    rotate_client_uuid,
     remove_device_from_panel,
+    rollback_orphan_panel_client,
 )
+from app.services.reconcile import safe_rotate_device_key
 from app.services.billing import billing_engine
 from app.config import BOT_NAME, ADMIN_ID
 from app.bot.bot import bot
@@ -68,6 +69,8 @@ _admin_user_error_last_sent: dict[tuple[Any, ...], float] = {}
 # Rate-limit: не чаще одного тикета в 60 секунд с одного user_id
 _SUPPORT_TICKET_COOLDOWN_SEC = 60.0
 _support_ticket_last_sent: dict[int, float] = {}
+
+_INTERNAL_ACTION_ERROR = "Internal server error. Please try again later."
 
 
 @asynccontextmanager
@@ -101,7 +104,7 @@ def _calendar_days_left(expire_at: datetime | None) -> int | None:
     now = datetime.now(timezone.utc)
     if expire_at.tzinfo is None:
         expire_at = expire_at.replace(tzinfo=timezone.utc)
-    return max((expire_at - now).days, 0)
+    return max((expire_at.date() - now.date()).days, 0)
 
 
 def _billing_days_left(balance_rub: float | Decimal | None, monthly_cost_rub: float | Decimal | None) -> int:
@@ -343,36 +346,90 @@ async def create_device(user_id: AuthUserId, body: DeviceCreateIn):
             extra=f"device_count={len(devices_raw)}",
         )
 
-    vless_link, client_uuid, err = await add_device_to_panel(
-        user_id=user_id,
-        username=user.get("username") or f"user_{user_id}",
-        device_name=body.device_name,
-    )
-
-    if err or not vless_link:
+    try:
+        vless_link, client_uuid, err = await add_device_to_panel(
+            user_id=user_id,
+            username=user.get("username") or f"user_{user_id}",
+            device_name=body.device_name,
+        )
+    except Exception as exc:
+        logger.exception(
+            "create_device.panel_exception user_id=%s device_name=%s",
+            user_id,
+            body.device_name,
+            exc_info=exc,
+        )
         await _raise_user_action_error(
             action="create_device",
             user_id=user_id,
             status_code=500,
-            detail=err or "Panel error",
+            detail=_INTERNAL_ACTION_ERROR,
             extra=f"device_name={body.device_name}, raw_status={user.get('status')}",
         )
 
-    device_id = await add_device(
-        user_id=user_id,
-        device_name=body.device_name,
-        client_uuid=client_uuid,
-        vless_link=vless_link,
-    )
+    if err or not vless_link:
+        logger.error(
+            "create_device.panel_failed user_id=%s device_name=%s err=%s",
+            user_id,
+            body.device_name,
+            err,
+        )
+        await _raise_user_action_error(
+            action="create_device",
+            user_id=user_id,
+            status_code=500,
+            detail=_INTERNAL_ACTION_ERROR,
+            extra=(
+                f"device_name={body.device_name}, raw_status={user.get('status')}, "
+                f"panel_err={err}"
+            ),
+        )
+
+    try:
+        device_id = await add_device(
+            user_id=user_id,
+            device_name=body.device_name,
+            client_uuid=client_uuid,
+            vless_link=vless_link,
+        )
+    except Exception as exc:
+        logger.exception(
+            "create_device.db_failed user_id=%s device_name=%s uuid=%s",
+            user_id,
+            body.device_name,
+            client_uuid,
+            exc_info=exc,
+        )
+        await rollback_orphan_panel_client(
+            user_id,
+            client_uuid,
+            context="api.create_device",
+        )
+        await _raise_user_action_error(
+            action="create_device",
+            user_id=user_id,
+            status_code=500,
+            detail=_INTERNAL_ACTION_ERROR,
+            extra=(
+                f"device_name={body.device_name}, client_uuid={client_uuid}, "
+                f"raw_status={user.get('status')}"
+            ),
+        )
 
     devices_raw = await get_user_devices(user_id)
     device = next((d for d in devices_raw if d["id"] == device_id), None)
     if not device:
+        logger.error(
+            "create_device.not_found_after_insert user_id=%s device_id=%s client_uuid=%s",
+            user_id,
+            device_id,
+            client_uuid,
+        )
         await _raise_user_action_error(
             action="create_device",
             user_id=user_id,
             status_code=500,
-            detail="Device created but not found",
+            detail=_INTERNAL_ACTION_ERROR,
             extra=f"device_id={device_id}, client_uuid={client_uuid}",
         )
 
@@ -413,8 +470,11 @@ async def delete_device(user_id: AuthUserId, device_id: int):
                 action="delete_device",
                 user_id=user_id,
                 status_code=502,
-                detail=f"Panel error — device not disabled: {msg}",
-                extra=f"device_id={device_id}, client_uuid={device['client_uuid']}",
+                detail=_INTERNAL_ACTION_ERROR,
+                extra=(
+                    f"device_id={device_id}, client_uuid={device['client_uuid']}, "
+                    f"panel_err={msg}"
+                ),
             )
 
     ok = await deactivate_device(device_id, user_id, reason="user_request")
@@ -445,8 +505,11 @@ async def hard_delete_device(user_id: AuthUserId, device_id: int):
             action="hard_delete_device",
             user_id=user_id,
             status_code=502,
-            detail=f"Panel error — device not deleted: {panel_err}",
-            extra=f"device_id={device_id}, client_uuid={device['client_uuid']}",
+            detail=_INTERNAL_ACTION_ERROR,
+            extra=(
+                f"device_id={device_id}, client_uuid={device['client_uuid']}, "
+                f"panel_err={panel_err}"
+            ),
         )
 
     deleted = await remove_device(device_id, user_id)
@@ -501,37 +564,41 @@ async def rotate_device_key(user_id: AuthUserId, device_id: int):
     device_label = device["device_name"]
 
     try:
-        new_uuid, new_link, err = await rotate_client_uuid(
+        new_link, new_uuid, err = await safe_rotate_device_key(
+            device_id=device_id,
             old_uuid=old_uuid,
             user_id=user_id,
             username=device_label,
+            device_name=device_label,
         )
-    except Exception as exc:
+    except RuntimeError as exc:
+        logger.exception(
+            "rotate_device_key.rollback_failed user_id=%s device_id=%s",
+            user_id,
+            device_id,
+            exc_info=exc,
+        )
         await _raise_user_action_error(
             action="rotate_device_key",
             user_id=user_id,
             status_code=500,
-            detail=str(exc),
-            extra=f"device_id={device_id}, old_uuid={old_uuid}",
-        )
-
-    if err or not new_link:
-        await _raise_user_action_error(
-            action="rotate_device_key",
-            user_id=user_id,
-            status_code=500,
-            detail=err or "rotate_client_uuid failed",
-            extra=f"device_id={device_id}, old_uuid={old_uuid}",
+            detail=_INTERNAL_ACTION_ERROR,
+            extra=f"device_id={device_id}, old_uuid={old_uuid}, rollback_failed=1",
         )
 
-    updated = await update_device_link(device_id, user_id, new_uuid, new_link)
-    if not updated:
+    if err or not new_link or not new_uuid:
+        logger.error(
+            "rotate_device_key.panel_failed user_id=%s device_id=%s err=%s",
+            user_id,
+            device_id,
+            err,
+        )
         await _raise_user_action_error(
             action="rotate_device_key",
             user_id=user_id,
             status_code=500,
-            detail="DB update failed after panel rotate",
-            extra=f"device_id={device_id}, old_uuid={old_uuid}, new_uuid={new_uuid}",
+            detail=_INTERNAL_ACTION_ERROR,
+            extra=f"device_id={device_id}, old_uuid={old_uuid}, panel_err={err}",
         )
 
     return RotateDeviceKeyResponse(vless_link=new_link, client_uuid=new_uuid)
@@ -622,21 +689,31 @@ async def rotate_key(user_id: AuthUserId):
             old_uuid=user.get("uuid"),
         )
     except Exception as exc:
+        logger.exception(
+            "rotate_key.failed user_id=%s",
+            user_id,
+            exc_info=exc,
+        )
         await _raise_user_action_error(
             action="rotate_key",
             user_id=user_id,
             status_code=500,
-            detail=str(exc),
+            detail=_INTERNAL_ACTION_ERROR,
             extra=f"old_uuid={user.get('uuid')}",
         )
 
     if err or not new_link:
+        logger.error(
+            "rotate_key.panel_failed user_id=%s err=%s",
+            user_id,
+            err,
+        )
         await _raise_user_action_error(
             action="rotate_key",
             user_id=user_id,
             status_code=500,
-            detail=err or "rotate_user_key failed",
-            extra=f"old_uuid={user.get('uuid')}",
+            detail=_INTERNAL_ACTION_ERROR,
+            extra=f"old_uuid={user.get('uuid')}, panel_err={err}",
         )
 
     await update_user_link(user_id, new_link, new_uuid)

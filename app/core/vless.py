@@ -52,8 +52,9 @@ def build_vless_link(client_uuid, username, flow=None, spx=None):
     if VLESS_SID:
         params.append(("sid", VLESS_SID))
 
+    # v2RayTun склеивает spx с fragment (#remark) — при включённом fragment spx не добавляем.
     effective_spx = spx if spx is not None else VLESS_SPX
-    if effective_spx and VLESS_SECURITY == "reality":
+    if effective_spx and VLESS_SECURITY == "reality" and not VLESS_USE_FRAGMENT:
         params.append(("spx", effective_spx))
 
     query = urlencode(params, quote_via=quote)

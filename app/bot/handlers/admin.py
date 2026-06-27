@@ -108,22 +108,40 @@ async def admin_give_balance(message: types.Message, bot: Bot) -> None:
     )
 
     # Реактивируем устройства если были деактивированы из-за баланса
-    devices = await get_user_devices(target_id)
+    success_count = 0
+    fail_count = 0
+    try:
+        devices = await get_user_devices(target_id)
+    except Exception:
+        logger.exception("admin_give_balance: get_user_devices failed user_id=%s", target_id)
+        devices = []
+
     inactive = [d for d in devices if not d["is_active"] and d.get("disabled_reason") == "insufficient_funds"]
 
     if inactive:
-        success_count, fail_count, _ = await activate_all_user_devices(target_id)
-        logger.info(
-            "admin_give_balance: reactivated devices user_id=%s ok=%s fail=%s",
-            target_id, success_count, fail_count,
-        )
-        if fail_count == 0 and success_count > 0:
-            await set_reactivation_notification_pending(target_id, False)
-        await message.answer(
-            f"🔌 Устройства пользователя <code>{target_id}</code> реактивированы: "
-            f"✅{success_count} ❌{fail_count}",
-            parse_mode="HTML",
-        )
+        try:
+            success_count, fail_count, _ = await activate_all_user_devices(target_id)
+            logger.info(
+                "admin_give_balance: reactivated devices user_id=%s ok=%s fail=%s",
+                target_id, success_count, fail_count,
+            )
+            if fail_count == 0 and success_count > 0:
+                await set_reactivation_notification_pending(target_id, False)
+            await message.answer(
+                f"🔌 Устройства пользователя <code>{target_id}</code> реактивированы: "
+                f"✅{success_count} ❌{fail_count}",
+                parse_mode="HTML",
+            )
+        except Exception:
+            logger.exception(
+                "admin_give_balance: activation failed user_id=%s",
+                target_id,
+            )
+            await message.answer(
+                f"⚠️ Баланс начислен, но реактивация устройств не удалась для "
+                f"<code>{target_id}</code>. Проверьте панель или reconcile.",
+                parse_mode="HTML",
+            )
 
     try:
         user_notice = (

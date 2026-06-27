@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Union
 
+from cachetools import TTLCache
 from aiogram import F, types
 from aiogram.filters import Command, CommandObject
 from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardRemove
@@ -12,6 +13,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.config import WEBAPP_URL, ADMIN_ID, TRIAL_DAYS
 from app.bot.dispatcher import dp
+from app.bot.bot import bot
 from app.bot.keyboards import main_kb, webapp_button
 from app.db import (
     get_user_data_dict,
@@ -22,13 +24,26 @@ from app.db import (
 
 logger = logging.getLogger(__name__)
 
+# Telegram/clients can occasionally deliver duplicate /start updates (retries, double-tap, bad network).
+# Protect UX: ignore repeats within a short window per user.
+_recent_start: TTLCache = TTLCache(maxsize=50_000, ttl=2.0)
+
 
 async def send_dynamic_instruction(
     target: Union[types.Message, types.CallbackQuery],
     user_id: int,
 ) -> None:
-    user = await get_user_data_dict(user_id)
-    devices = await get_user_devices(user_id)
+    try:
+        user = await get_user_data_dict(user_id)
+        devices = await get_user_devices(user_id)
+    except Exception:
+        logger.exception("send_dynamic_instruction.db_failed user_id=%s", user_id)
+        err_msg = "⚠️ Не удалось загрузить данные. Попробуйте позже."
+        if isinstance(target, types.CallbackQuery):
+            await target.answer(err_msg, show_alert=True)
+        else:
+            await target.answer(err_msg)
+        return
 
     # Device keys are the source of truth for billing. Fall back to the
     # legacy account-level key only when the user has no device records yet.
@@ -101,42 +116,39 @@ async def send_dynamic_instruction(
 async def start_cmd(message: types.Message, command: CommandObject) -> None:
     user_id = message.from_user.id
     username = message.from_user.username or f"user_{user_id}"
+    start_arg = (command.args or "").strip().lower()
+    is_topup_deep_link = start_arg in ("pay", "topup")
 
-    user = await get_user_data_dict(user_id)
-    if not user:
-        await save_user(
-            user_id,
-            username,
-            expire_at=datetime.now(timezone.utc),
-            vless_link=None,  # не пустая строка — иначе UNIQUE на uuid="" ломается
-            uuid_val=None,
-            status="TRIAL",
-        )
-        logger.info("start_cmd.new_user user_id=%s", user_id)
+    # Drop near-simultaneous duplicate /start updates for the same user.
+    # Deep-links (topup/pay) must not be swallowed — WebApp opens them explicitly.
+    if not is_topup_deep_link:
+        if user_id in _recent_start:
+            await message.answer("⏳ Уже обрабатываю предыдущий /start. Подождите секунду.")
+            return
+        _recent_start[user_id] = True
 
-    # Deep link: /start pay — сразу показываем инлайн-кнопки с суммами
-    if command.args in ("pay", "topup"):
-        try:
-            from app.config import PAYMENT_AMOUNTS
-            amounts = PAYMENT_AMOUNTS
-        except ImportError:
-            amounts = [10000, 20000, 30000, 60000]
-
-        builder = InlineKeyboardBuilder()
-        for amount_cents in amounts:
-            rub = amount_cents // 100
-            builder.row(
-                types.InlineKeyboardButton(
-                    text=f"💳 Пополнить на {rub} руб.",
-                    callback_data=f"pay_amount_{amount_cents}",
-                )
+    try:
+        user = await get_user_data_dict(user_id)
+        if not user:
+            await save_user(
+                user_id,
+                username,
+                expire_at=datetime.now(timezone.utc) + timedelta(days=TRIAL_DAYS),
+                vless_link=None,  # не пустая строка — иначе UNIQUE на uuid="" ломается
+                uuid_val=None,
+                status="TRIAL",
             )
-
+            logger.info("start_cmd.new_user user_id=%s", user_id)
+    except Exception:
+        logger.exception("start_cmd.db_failed user_id=%s", user_id)
         await message.answer(
-            "💰 <b>Пополнение баланса</b>\n\nВыберите сумму:",
-            parse_mode="HTML",
-            reply_markup=builder.as_markup(),
+            "⚠️ Не удалось зарегистрировать профиль. Попробуйте /start ещё раз через минуту."
         )
+        return
+
+    if is_topup_deep_link:
+        from app.bot.handlers.payments import send_payment_options_message
+        await send_payment_options_message(message)
         return
 
     name = html.escape(message.from_user.first_name)
@@ -151,19 +163,29 @@ async def start_cmd(message: types.Message, command: CommandObject) -> None:
         "Нажмите <b>«🌐 Личный кабинет»</b> — всё управление там!\n\n"
         "📢 Новости и обновления: <a href='https://t.me/metronVPN'>t.me/metronVPN</a>"
     )
+    # 1) Всегда показываем inline-кнопку "Личный кабинет" в главном сообщении.
     await message.answer(
         text,
         reply_markup=main_kb(WEBAPP_URL, user_id),
         parse_mode="HTML",
         disable_web_page_preview=True,
     )
-    # Снимаем старую reply-клавиатуру (Профиль / Инструкция / Поддержка), если осталась у юзера
-    cleanup = await message.answer(".", reply_markup=ReplyKeyboardRemove())
-    await asyncio.sleep(0.3)
+
+    # 2) Если у старых пользователей "залипла" reply-клавиатура — снимаем её
+    # отдельным техническим сообщением и удаляем его максимально надёжно.
+    # Это не должно создавать "рандомных" сообщений в чате.
+    cleanup = None
     try:
-        await cleanup.delete()
+        cleanup = await message.answer(".", reply_markup=ReplyKeyboardRemove())
+        for _ in range(3):
+            await asyncio.sleep(0.2)
+            try:
+                await bot.delete_message(chat_id=cleanup.chat.id, message_id=cleanup.message_id)
+                break
+            except Exception:
+                continue
     except Exception:
-        pass
+        logger.exception("start_cmd.reply_kb_cleanup_failed user_id=%s", user_id)
 
 
 @dp.callback_query(F.data == "show_instruction")

@@ -23,6 +23,7 @@ from app.db import (
 from app.services.vpn import (
     add_device_to_panel,
     remove_device_from_panel,
+    rollback_orphan_panel_client,
 )
 from app.bot import keyboards
 
@@ -98,15 +99,23 @@ async def cb_devices_list(callback: types.CallbackQuery):
     if not user:
         await callback.answer()
         return
-    devices = await get_user_devices(user_id)
+    try:
+        devices = await get_user_devices(user_id)
+    except Exception:
+        logger.exception("devices_list.db_failed user_id=%s", user_id)
+        await callback.answer("❌ Не удалось загрузить устройства", show_alert=True)
+        return
     await callback.message.edit_reply_markup(reply_markup=keyboards.build_devices_keyboard(devices))
     await callback.answer()
 
 
 @dp.callback_query(F.data.startswith("device_detail_"))
 async def cb_device_detail(callback: types.CallbackQuery):
-    parts = callback.data.split("_")
-    device_id = int(parts[-1])
+    try:
+        device_id = int(callback.data.split("_")[-1])
+    except (ValueError, IndexError):
+        await callback.answer("❌ Некорректный запрос")
+        return
     device = await get_device_by_id(device_id)
     if not device or device["user_id"] != callback.from_user.id:
         await callback.answer("❌ Устройство не найдено")
@@ -142,22 +151,43 @@ async def cb_add_device(callback: types.CallbackQuery, state: FSMContext):
 @dp.message(StateFilter(AddDeviceStates.waiting_for_name))
 async def process_device_name(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
+    if not message.text:
+        await message.answer("❌ Отправьте текстовое название устройства.")
+        return
     device_name = message.text.strip()[:50]
     if not device_name:
         await message.answer("❌ Название не может быть пустым.")
         return
-    await state.clear()
+
     user = await get_user(user_id)
     if not user or user.get("status") not in ("ACTIVE", "TRIAL"):
+        await state.clear()
         await message.answer("❌ Добавление устройства доступно только активным пользователям.")
         return
+
     username = message.from_user.username or str(user_id)
-    vless_link, client_uuid, err = await add_device_to_panel(user_id, username, device_name)
-    if err:
-        logger.error("add_device.panel_error user_id=%s err=%s", user_id, err)
-        await message.answer(f"❌ Ошибка при создании клиента: {err}")
+    client_uuid: str | None = None
+    vless_link: str | None = None
+    try:
+        vless_link, client_uuid, err = await add_device_to_panel(user_id, username, device_name)
+        if err:
+            logger.error("add_device.panel_error user_id=%s err=%s", user_id, err)
+            await state.clear()
+            await message.answer("❌ Ошибка при создании клиента. Попробуйте позже.")
+            return
+        await add_device(user_id, device_name, client_uuid, vless_link)
+    except Exception:
+        logger.exception("add_device.failed user_id=%s", user_id)
+        await rollback_orphan_panel_client(
+            user_id,
+            client_uuid,
+            context="bot.add_device",
+        )
+        await state.clear()
+        await message.answer("❌ Не удалось добавить устройство. Попробуйте позже.")
         return
-    await add_device(user_id, device_name, client_uuid, vless_link)
+
+    await state.clear()
     await message.answer(
         f"✅ Устройство <b>{html.escape(device_name)}</b> добавлено!\n\n"
         f"VLESS ключ:\n<code>{html.escape(vless_link)}</code>\n\n"
@@ -171,7 +201,11 @@ async def process_device_name(message: types.Message, state: FSMContext):
 # callback_data: "device_delete_confirm_{id}"  — не пересекается с "device_delete_{id}"
 @dp.callback_query(F.data.startswith("device_delete_confirm_"))
 async def cb_device_delete_confirm(callback: types.CallbackQuery):
-    device_id = int(callback.data.split("_")[-1])
+    try:
+        device_id = int(callback.data.split("_")[-1])
+    except (ValueError, IndexError):
+        await callback.answer("❌ Некорректный запрос")
+        return
     device = await get_device_by_id(device_id)
     if not device or device["user_id"] != callback.from_user.id:
         await callback.answer("❌ Устройство не найдено")
@@ -189,7 +223,11 @@ async def cb_device_delete_confirm(callback: types.CallbackQuery):
 # callback_data: "device_delete_{id}"
 @dp.callback_query(F.data.startswith("device_delete_") & ~F.data.startswith("device_delete_confirm_"))
 async def cb_device_delete(callback: types.CallbackQuery):
-    device_id = int(callback.data.split("_")[-1])
+    try:
+        device_id = int(callback.data.split("_")[-1])
+    except (ValueError, IndexError):
+        await callback.answer("❌ Некорректный запрос")
+        return
     device = await get_device_by_id(device_id)
     if not device or device["user_id"] != callback.from_user.id:
         await callback.answer("❌ Устройство не найдено")
@@ -213,7 +251,19 @@ async def cb_device_delete(callback: types.CallbackQuery):
             return
 
     # Хард делит из БД
-    await delete_device(device_id)
+    try:
+        await delete_device(device_id)
+    except Exception:
+        logger.exception(
+            "delete_device.db_fail device_id=%s uuid=%s",
+            device_id, client_uuid,
+        )
+        await callback.answer(
+            "❌ Не удалось удалить устройство. Попробуйте позже.",
+            show_alert=True,
+        )
+        return
+
     logger.info(
         "delete_device.done user_id=%s device_id=%s uuid=%s",
         callback.from_user.id, device_id, client_uuid,
@@ -231,8 +281,13 @@ async def cb_device_delete(callback: types.CallbackQuery):
 async def cb_back(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     user_id = callback.from_user.id
-    user = await get_user(user_id)
-    devices = await get_user_devices(user_id)
+    try:
+        user = await get_user(user_id)
+        devices = await get_user_devices(user_id)
+    except Exception:
+        logger.exception("profile.back.db_failed user_id=%s", user_id)
+        await callback.answer("❌ Не удалось загрузить профиль", show_alert=True)
+        return
     text = _profile_text(user, devices, user_id) if user else "❌ Пользователь не найден."
     await callback.message.edit_text(
         text,

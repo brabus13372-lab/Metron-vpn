@@ -49,6 +49,7 @@ from app.db.payments import (
     record_payment_idempotent,
     apply_payment_topup_idempotent,
     get_payment_by_charge_ids,
+    list_received_payment_ids,
 )
 from app.db.support import (
     create_ticket,
@@ -99,6 +100,7 @@ __all__ = [
     "record_payment_idempotent",
     "apply_payment_topup_idempotent",
     "get_payment_by_charge_ids",
+    "list_received_payment_ids",
     # support
     "create_ticket",
     "get_user_tickets",
